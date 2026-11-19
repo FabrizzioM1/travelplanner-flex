@@ -4,3 +4,20 @@
 @media(max-width:390px){.grid-3,.grid-2,.grid-4{grid-template-columns:1fr}.card-img{height:180px}.header-right select{max-width:121px}.activity{flex-wrap:wrap}.activity .actions{width:100%;justify-content:flex-end}.reservation{flex-direction:column}.form-grid{grid-template-columns:1fr}}
 
 .auth-form{display:flex;flex-direction:column;gap:11px;width:100%}.auth-form h2{margin-bottom:0}.auth-form p{margin-bottom:7px}.auth-form label{font-size:13px;font-weight:800;color:var(--ink)}.auth-form input{border:1px solid #cedddd;padding:14px;border-radius:12px;width:100%;font-size:14px}.auth-switch{font-size:12px!important;text-align:center;margin:5px 0 0!important}.auth-switch button{border:0;background:none;color:var(--teal);font-weight:800;padding:0}.login-note{margin-top:10px}
+
+/* TravelPlanner Flex 2.0 — exploración nacional y recomendaciones */
+.explore-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 14px;padding:6px;background:#eaf1f2;border-radius:14px;width:max-content;max-width:100%}
+.explore-tabs button{border:0;background:transparent;color:#476271;border-radius:10px;padding:11px 18px;font-weight:800;font-size:13px}
+.explore-tabs button.active{background:#fff;color:var(--teal);box-shadow:0 3px 12px #102d4310}
+.destination-search{display:flex;align-items:end;gap:18px;justify-content:space-between;padding:17px 19px;background:#fff;border:1px solid var(--line);border-radius:17px;box-shadow:var(--shadow)}
+.destination-search .field{min-width:min(340px,100%);flex:1}
+.destination-search .field label,.transport-origin .field label{font-size:12px;font-weight:800;color:#345267}
+.destination-search select,.catalog-search,.transport-origin input{width:100%;border:1px solid #d7e2e4;border-radius:10px;padding:12px 14px;background:#fbfcfc;color:var(--ink);font-size:14px}
+.destination-note{display:flex;flex-direction:column;gap:4px;text-align:right;white-space:nowrap}
+.destination-note strong{font-size:13px;color:var(--navy)}.destination-note span{font-size:11px;color:var(--muted)}
+.explore-panel{margin-top:18px}.catalog-search{max-width:430px}.recommendation-intro{margin:4px 0 17px;padding:19px 21px;background:linear-gradient(120deg,#edf8f5,#f6f9f8);border-radius:16px}
+.recommendation-intro h3{font-size:21px;margin:7px 0}.recommendation-intro p{font-size:13px;color:var(--muted);margin:0;line-height:1.6}
+.recommendation-card{display:flex;gap:16px;padding:19px;align-items:flex-start}.recommendation-icon{flex:0 0 45px;width:45px;height:45px;border-radius:14px;background:#e4f5f1;color:#087c78;display:grid;place-items:center;font-size:25px;font-weight:800}
+.recommendation-body{min-width:0;flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:9px}.recommendation-body h4{font-size:16px}.recommendation-body p{font-size:12px;color:var(--muted);line-height:1.55;margin:0}.recommendation-body small{font-size:11px;color:#718590;line-height:1.5}.provider-links{display:flex;gap:7px;flex-wrap:wrap;margin:4px 0}.provider-link{display:inline-flex;padding:7px 10px;border-radius:9px;border:1px solid var(--line);color:var(--navy);font-size:11px;font-weight:750;text-decoration:none;background:#fbfdfd}.provider-link:hover{border-color:#9fd7d0;color:#087c78;background:#effaf7}
+.transport-origin{display:flex;align-items:end;gap:12px;padding:15px 17px;background:white;border:1px solid var(--line);border-radius:15px;margin:12px 0 16px}.transport-origin .field{flex:1;min-width:180px}
+@media(max-width:760px){.explore-tabs{width:100%;display:grid;grid-template-columns:repeat(3,1fr)}.explore-tabs button{padding:10px 5px;font-size:12px}.destination-search{display:block}.destination-search .field{min-width:0}.destination-note{text-align:left;margin-top:10px}.recommendation-card{padding:14px;gap:11px}.recommendation-icon{width:37px;height:37px;flex-basis:37px;font-size:20px}.transport-origin{display:block}.transport-origin .btn{width:100%;margin-top:10px}.catalog-search{max-width:none}.recommendation-intro{padding:15px}}
