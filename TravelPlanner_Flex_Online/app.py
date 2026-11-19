@@ -438,7 +438,7 @@ def detail(db,tid):
     expenses=rows(db,'SELECT g.*,v.nombre AS pagador FROM gasto g LEFT JOIN viajero v ON v.id_viajero=g.id_pagador WHERE g.id_viaje=? ORDER BY g.fecha DESC,g.id_gasto DESC',(tid,))
     travelers=rows(db,'SELECT * FROM viajero WHERE id_viaje=? ORDER BY id_viajero',(tid,))
     votos=rows(db,"""SELECT v.id_lugar, l.nombre AS lugar, SUM(CASE WHEN v.decision=1 THEN 1 ELSE 0 END) si, SUM(CASE WHEN v.decision=-1 THEN 1 ELSE 0 END) no
-          FROM voto v JOIN viajero t ON v.id_viajero=t.id_viajero JOIN lugar l ON v.id_lugar=l.id_lugar WHERE t.id_viaje=? GROUP BY v.id_lugar""",(tid,))
+          FROM voto v JOIN viajero t ON v.id_viajero=t.id_viajero JOIN lugar l ON v.id_lugar=l.id_lugar WHERE t.id_viaje=? GROUP BY v.id_lugar, l.nombre""",(tid,))
     split={q['nombre']:{'pagado':0.0,'parte':0.0,'saldo':0.0} for q in travelers}
     for ex in expenses:
         if ex['compartido'] and ex['id_pagador'] is not None and travelers:
