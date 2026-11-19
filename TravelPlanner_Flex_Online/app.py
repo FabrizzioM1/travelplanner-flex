@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -13,8 +14,10 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from decimal import Decimal
-from urllib.request import urlopen
-from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode, urlparse
+
+from catalogo_mexico import DESTINOS_NACIONALES, NATIONAL_PLACES, PHOTO_PLACEHOLDER
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -38,11 +41,8 @@ if DATABASE_URL.startswith('postgres://'):
 # Neon exige TLS; si la URL no incluye sslmode, se agrega explícitamente.
 if DATABASE_URL and 'sslmode=' not in DATABASE_URL:
     DATABASE_URL += ('&' if '?' in DATABASE_URL else '?') + 'sslmode=require'
-DESTINOS = {
-    'Oaxaca': (17.0654, -96.7237),
-    'Veracruz': (19.1738, -96.1342),
-    'Puebla': (19.0414, -98.2063),
-}
+# Cobertura nacional: las 32 entidades federativas. Coordenadas de referencia.
+DESTINOS = DESTINOS_NACIONALES
 
 # Fotografías reales seleccionadas manualmente de Wikimedia Commons.
 # Se conserva el enlace a la ficha original y la licencia junto a cada foto.
@@ -304,17 +304,90 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         db.executescript(SCHEMA_PG if DATABASE_URL else SCHEMA)
-        for place in PLACES:
+        # Siembra incremental y no destructiva: no borra viajes ni reemplaza
+        # fotografías nacionales que ya se hayan resuelto desde Commons.
+        for place in list(PLACES) + list(NATIONAL_PLACES):
             item = list(place)
             local_photo = STATIC / 'img' / 'real' / f"{item[0]}.jpg"
-            image_value = f"/static/img/real/{item[0]}.jpg" if local_photo.is_file() else item[7]
+            if local_photo.is_file():
+                image_value = f"/static/img/real/{item[0]}.jpg"
+            else:
+                image_value = item[7] or PHOTO_PLACEHOLDER
             item[7] = image_value
             db.execute(
                 "INSERT INTO lugar (id_lugar,ciudad,nombre,categoria,etiquetas,lat,lon,imagen,precio_estimado,duracion_min,interior,descripcion,credito,licencia,fuente) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id_lugar) DO NOTHING",
                 tuple(item),
             )
-            db.execute('UPDATE lugar SET imagen=?,credito=?,licencia=?,fuente=? WHERE id_lugar=?',
-                       (image_value, item[12], item[13], item[14], item[0]))
+            # Los 12 lugares originales conservan sus fotos curadas. Los nuevos
+            # lugares empiezan con placeholder y solo se actualizan si hay una
+            # copia local; la búsqueda remota actualiza sus metadatos después.
+            if image_value != PHOTO_PLACEHOLDER:
+                db.execute('UPDATE lugar SET imagen=?,credito=?,licencia=?,fuente=? WHERE id_lugar=?',
+                           (image_value, item[12], item[13], item[14], item[0]))
+
+
+def _plain_commons(value):
+    value = html.unescape(str(value or ''))
+    value = re.sub(r'<[^>]*>', ' ', value)
+    return re.sub(r'\s+', ' ', value).strip()
+
+
+def commons_photo_for_place(db, place_id):
+    '''Busca una fotografía real en Wikimedia Commons y guarda atribución/licencia.
+
+    Se ejecuta solo cuando el usuario abre el catálogo de un lugar sin foto; la
+    respuesta y sus metadatos quedan guardados en PostgreSQL para no repetir la
+    consulta en cada visita. Si Commons no responde, se conserva el placeholder.
+    '''
+    place = row(db, 'SELECT * FROM lugar WHERE id_lugar=?', (place_id,))
+    if not place:
+        raise UserError('Lugar no encontrado.', 404)
+    current = place.get('imagen') or ''
+    if current and current != PHOTO_PLACEHOLDER and not current.endswith('photo-placeholder.svg'):
+        return {'imagen': current, 'credito': place.get('credito') or '',
+                'licencia': place.get('licencia') or '', 'fuente': place.get('fuente') or '', 'encontrada': True}
+    query = f'filetype:bitmap "{place["nombre"]}" {place["ciudad"]} Mexico'
+    params = {
+        'action': 'query', 'generator': 'search', 'gsrsearch': query,
+        'gsrnamespace': 6, 'gsrlimit': 6, 'prop': 'imageinfo',
+        'iiprop': 'url|extmetadata', 'iiurlwidth': 1000,
+        'iiextmetadatafilter': 'Artist|Credit|LicenseShortName|UsageTerms',
+        'format': 'json', 'formatversion': 2,
+    }
+    uri = 'https://commons.wikimedia.org/w/api.php?' + urlencode(params)
+    try:
+        req = Request(uri, headers={'User-Agent': 'TravelPlannerFlex/2.0 (educational travel-planning project)'})
+        with urlopen(req, timeout=7) as response:
+            payload = json.load(response)
+        pages = (payload.get('query') or {}).get('pages') or []
+        if isinstance(pages, dict):
+            pages = list(pages.values())
+        pages.sort(key=lambda x: (0 if place['nombre'].lower() in x.get('title', '').lower() else 1, x.get('title', '')))
+        selected = None
+        for page in pages:
+            infos = page.get('imageinfo') or []
+            if not infos:
+                continue
+            info = infos[0]
+            image_url = info.get('thumburl') or info.get('url')
+            if image_url and image_url.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                selected = (page, info, image_url)
+                break
+        if not selected:
+            return {'imagen': PHOTO_PLACEHOLDER, 'credito': '', 'licencia': '', 'fuente': '', 'encontrada': False}
+        page, info, image_url = selected
+        meta = info.get('extmetadata') or {}
+        artist = _plain_commons((meta.get('Artist') or {}).get('value') or (meta.get('Credit') or {}).get('value'))
+        license_name = _plain_commons((meta.get('LicenseShortName') or {}).get('value') or (meta.get('UsageTerms') or {}).get('value'))
+        source = info.get('descriptionurl') or ('https://commons.wikimedia.org/wiki/' + page.get('title', '').replace(' ', '_'))
+        artist = artist or 'Autor indicado en Wikimedia Commons'
+        license_name = license_name or 'Consultar licencia en la ficha original'
+        db.execute('UPDATE lugar SET imagen=?,credito=?,licencia=?,fuente=? WHERE id_lugar=?',
+                   (image_url, artist, license_name, source, place_id))
+        return {'imagen': image_url, 'credito': artist, 'licencia': license_name, 'fuente': source, 'encontrada': True}
+    except Exception as exc:
+        app.logger.warning('No se pudo resolver fotografía Commons para %s: %s', place_id, exc)
+        return {'imagen': PHOTO_PLACEHOLDER, 'credito': '', 'licencia': '', 'fuente': '', 'encontrada': False}
 
 def date_value(v,label="Fecha"):
     try:
@@ -457,7 +530,7 @@ def detail(db,tid):
 
 def create_trip(db, p):
     required(p, ['nombre','destino','fecha_inicio','fecha_fin'])
-    if p['destino'] not in DESTINOS: raise UserError('Selecciona uno de los destinos disponibles: Oaxaca, Veracruz o Puebla.')
+    if p['destino'] not in DESTINOS: raise UserError('Selecciona una de las 32 entidades federativas disponibles.')
     if date_value(p['fecha_fin']) < date_value(p['fecha_inicio']): raise UserError('La fecha de finalización no puede ser anterior a la de inicio.')
     count = int(p.get('num_viajeros', 1))
     if not 1 <= count <= 100: raise UserError('El número de viajeros debe estar entre 1 y 100.')
@@ -641,8 +714,10 @@ def api_router(subpath):
         city = qs.get('ciudad','')
         with connect() as db:
             data = rows(db, 'SELECT * FROM lugar WHERE ciudad=? ORDER BY categoria,nombre', (city,)) if city else rows(db, 'SELECT * FROM lugar ORDER BY ciudad,categoria,nombre')
-        for item in data: item['imagen_url'] = item['imagen']
-        return jsonify({'lugares': data, 'destinos': list(DESTINOS.keys())})
+        for item in data:
+            item['imagen_url'] = item['imagen']
+            item['foto_pendiente'] = (item['imagen'] == PHOTO_PLACEHOLDER or str(item['imagen']).endswith('photo-placeholder.svg'))
+        return jsonify({'lugares': data, 'destinos': list(DESTINOS.keys()), 'cobertura_entidades': len(DESTINOS)})
 
     if path == '/api/preferencias' and method == 'GET':
         tid = qs.get('viaje','')
@@ -661,6 +736,39 @@ def api_router(subpath):
         return jsonify({'id_viaje': tid}), 201
 
     bits = path.strip('/').split('/')
+
+    if len(bits) == 4 and bits[:3] == ['api', 'catalogo', 'foto'] and method == 'GET':
+        with connect() as db:
+            return jsonify(commons_photo_for_place(db, bits[3]))
+
+    if len(bits) == 4 and bits[:2] == ['api', 'viajes'] and bits[2].isdigit() and bits[3] == 'lugares' and method == 'POST':
+        vid = int(bits[2])
+        required(p, ['id_lugar'])
+        with connect() as db:
+            t = trip(db, vid)
+            place = row(db, 'SELECT * FROM lugar WHERE id_lugar=?', (p['id_lugar'],))
+            if not place:
+                raise UserError('El lugar ya no está disponible en el catálogo.', 404)
+            if place['ciudad'] != t['destino']:
+                raise UserError('El lugar debe pertenecer al destino del viaje seleccionado.')
+            day_date = p.get('fecha') or t['fecha_inicio']
+            parsed = date_value(day_date, 'Fecha de actividad')
+            if not (date_value(t['fecha_inicio']) <= parsed <= date_value(t['fecha_fin'])):
+                raise UserError('La fecha elegida debe estar dentro del viaje.')
+            day = row(db, 'SELECT * FROM itinerario WHERE id_viaje=? AND fecha=?', (vid, day_date))
+            if not day:
+                cur_day = db.execute('INSERT INTO itinerario(id_viaje,fecha,titulo,descripcion) VALUES (?,?,?,?)',
+                                     (vid, day_date, 'Día de exploración', 'Lugares agregados desde Explorar México.'))
+                day_id = cur_day.lastrowid
+            else:
+                day_id = day['id_itinerario']
+            cur_activity = db.execute('''INSERT INTO actividad
+                (id_itinerario,nombre,hora_inicio,duracion_min,lugar,costo_estimado,categoria,lugar_id,estado)
+                VALUES (?,?,?,?,?,?,?,?,?)''',
+                (day_id, place['nombre'], p.get('hora_inicio', '10:00'), place['duracion_min'],
+                 place['nombre'], place['precio_estimado'], place['categoria'], place['id_lugar'], 'planeada'))
+            return jsonify({'ok': True, 'id_actividad': cur_activity.lastrowid, 'id_itinerario': day_id}), 201
+
     if len(bits) >= 3 and bits[:2] == ['api','viajes'] and bits[2].isdigit():
         vid = int(bits[2])
         with connect() as db:
