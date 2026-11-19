@@ -1,0 +1,110 @@
+[
+  {
+    "id": "oax_culturas",
+    "name": "Museo de las Culturas de Oaxaca",
+    "city": "Oaxaca",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/98/Museo_de_las_Culturas_de_Oaxaca.jpg",
+    "credit": "EdsonCid",
+    "license": "CC BY-SA 3.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Museo_de_las_Culturas_de_Oaxaca.jpg"
+  },
+  {
+    "id": "oax_textil",
+    "name": "Museo Textil de Oaxaca",
+    "city": "Oaxaca",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/b2/Museo_Textil_de_Oaxaca_%28MTO%29.jpg",
+    "credit": "ArribalaLuna",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Museo_Textil_de_Oaxaca_(MTO).jpg"
+  },
+  {
+    "id": "oax_hierve",
+    "name": "Hierve el Agua",
+    "city": "Oaxaca",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/76/Hierve_el_agua%2C_Oaxaca.jpg",
+    "credit": "JishaBP",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Hierve_el_agua,_Oaxaca.jpg"
+  },
+  {
+    "id": "oax_mercado",
+    "name": "Mercado 20 de Noviembre",
+    "city": "Oaxaca",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/8/88/Mercado_a_20_Noviembre%2C_Oaxaca.jpg",
+    "credit": "Dan Nevill",
+    "license": "CC BY 2.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Mercado_a_20_Noviembre,_Oaxaca.jpg"
+  },
+  {
+    "id": "oax_monte",
+    "name": "Monte Albán",
+    "city": "Oaxaca",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Monte_Alb%C3%A1n_en_Oaxaca.jpg/960px-Monte_Alb%C3%A1n_en_Oaxaca.jpg",
+    "credit": "Minkyroa",
+    "license": "CC BY 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Monte_Alb%C3%A1n_en_Oaxaca.jpg"
+  },
+  {
+    "id": "oax_jardin",
+    "name": "Jardín Etnobotánico de Oaxaca",
+    "city": "Oaxaca",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/1/18/Jard%C3%ADn_Etnobot%C3%A1nico_%28Oaxaca%2C_Oaxaca%29.jpg",
+    "credit": "A1437053",
+    "license": "CC BY-SA 3.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Jard%C3%ADn_Etnobot%C3%A1nico_(Oaxaca,_Oaxaca).jpg"
+  },
+  {
+    "id": "ver_ulua",
+    "name": "San Juan de Ulúa",
+    "city": "Veracruz",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/d/d8/Fuerte_San_Juan_de_Ul%C3%BAa.jpg",
+    "credit": "Yobahi",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Fuerte_San_Juan_de_Ul%C3%BAa.jpg"
+  },
+  {
+    "id": "ver_naval",
+    "name": "Museo Naval México",
+    "city": "Veracruz",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/7a/Museo_Naval_M%C3%A9xico_04.jpg",
+    "credit": "WendyAvilesR",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Museo_Naval_M%C3%A9xico_04.jpg"
+  },
+  {
+    "id": "ver_malecon",
+    "name": "Malecón de Veracruz",
+    "city": "Veracruz",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/c/c4/Malec%C3%B3n_de_Veracruz.jpg",
+    "credit": "Koffermejia",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Malec%C3%B3n_de_Veracruz.jpg"
+  },
+  {
+    "id": "ver_acuario",
+    "name": "Acuario de Veracruz",
+    "city": "Veracruz",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/6/63/Nuevo_Acuarium_de_Veracruz.jpg",
+    "credit": "Skavania",
+    "license": "CC BY 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Nuevo_Acuarium_de_Veracruz.jpg"
+  },
+  {
+    "id": "pue_amparo",
+    "name": "Museo Amparo",
+    "city": "Puebla",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/5/57/Vista_del_Museo_Amparo_Puebla_M%C3%A9xico.JPG",
+    "credit": "ALVivaldi",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Vista_del_Museo_Amparo_Puebla_M%C3%A9xico.JPG"
+  },
+  {
+    "id": "pue_biblio",
+    "name": "Biblioteca Palafoxiana",
+    "city": "Puebla",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/c/cc/Biblioteca_Palafoxiana_de_Puebla.jpg",
+    "credit": "ProtoplasmaKid",
+    "license": "CC BY-SA 4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Biblioteca_Palafoxiana_de_Puebla.jpg"
+  }
+]

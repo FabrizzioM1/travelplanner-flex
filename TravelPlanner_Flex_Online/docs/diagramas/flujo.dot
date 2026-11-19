@@ -1,0 +1,15 @@
+digraph G {
+  graph [rankdir=LR,bgcolor="transparent",pad=0.25,nodesep=0.27,ranksep=0.48,splines=polyline];
+  node [shape=box,style="rounded,filled",fontname="DejaVu Sans",fontsize=12,margin="0.18,0.12",color="#cadee0",fillcolor="#f1f8f7",fontcolor="#173b50"];
+  edge [color="#17a398",arrowsize=0.7,penwidth=1.6];
+  start [label="Acceso\nPIN",fillcolor="#17374e",fontcolor="white"];
+  travel [label="Nuevo viaje\nDestino y fechas"];
+  dock [label="Barra inferior\nResumen dinámico",fillcolor="#d6f3e9"];
+  detail [label="Detalle del viaje\nElegir módulo"];
+  module [label="Hospedaje / Transporte\nItinerario / Gastos"];
+  validation [label="Validar datos\ny conflictos",shape=diamond,fillcolor="#fff1d8"];
+  db [label="SQLite: guardar\ny relacionar",fillcolor="#17374e",fontcolor="white"];
+  output [label="Consultar viaje\ny saldo",fillcolor="#d6f3e9"];
+  start->travel->dock->detail->module->validation->db->output;
+  validation->module [label="corregir",color="#da9655",fontcolor="#da9655",fontsize=10,constraint=false];
+}

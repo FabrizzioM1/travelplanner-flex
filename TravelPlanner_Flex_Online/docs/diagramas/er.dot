@@ -1,0 +1,23 @@
+digraph G {
+ graph [rankdir=LR,bgcolor="transparent",pad=0.16,nodesep=0.17,ranksep=0.66,splines=polyline];
+ node [shape=box,style="rounded,filled",fontname="DejaVu Sans",fontsize=11,margin="0.16,0.13",color="#c0d7d9",fillcolor="#f4f9f8",fontcolor="#163a4f"];
+ edge [color="#5b9997",penwidth=1.1,arrowsize=.55,fontname="DejaVu Sans",fontsize=9,fontcolor="#456879"];
+ viaje [label="VIAJE\nPK id_viaje",fillcolor="#17374e",fontcolor="white"];
+ hospedaje [label="HOSPEDAJE\nFK id_viaje"];
+ transporte [label="TRANSPORTE\nFK id_viaje"];
+ itinerario [label="ITINERARIO\nFK id_viaje"];
+ actividad [label="ACTIVIDAD\nFK id_itinerario"];
+ presupuesto [label="PRESUPUESTO\nFK id_viaje · UNIQUE"];
+ categoria [label="PRESUPUESTO_CATEGORIA\nFK id_presupuesto"];
+ gasto [label="GASTO\nFK id_viaje"];
+ viajero [label="VIAJERO\nFK id_viaje"];
+ preferencia [label="PREFERENCIA\nFK id_viaje"];
+ escenario [label="ESCENARIO_VIAJE\nFK id_viaje"];
+ lugar [label="LUGAR\nPK id_lugar",fillcolor="#def2ef"];
+ alternativa [label="ALTERNATIVA_ACTIVIDAD\nFK id_actividad, id_lugar"];
+ voto [label="VOTO\nFK id_viajero, id_lugar"];
+ viaje->hospedaje [label="1:N"];viaje->transporte [label="1:N"];viaje->itinerario [label="1:N"];itinerario->actividad [label="1:N"];
+ viaje->presupuesto [label="1:1"];presupuesto->categoria [label="1:N"];viaje->gasto [label="1:N"];
+ viaje->viajero [label="1:N"];viaje->preferencia [label="1:N"];viaje->escenario [label="1:N"];
+ actividad->alternativa [label="1:N"];lugar->alternativa [label="1:N"];viajero->voto [label="1:N"];lugar->voto [label="1:N"];
+}

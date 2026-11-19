@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#102d43">
+<meta name="description" content="TravelPlanner Flex: planea viajes, descubre lugares reales, compara presupuestos y prepara planes alternativos.">
+<title>TravelPlanner Flex · Tu viaje, mejor pensado</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div id="login" class="login-page">
+  <div class="login-scene">
+    <div class="login-headline">
+      <span class="chip white">VIAJA A TU MANERA</span>
+      <h1>Un viaje bien pensado,<br><em>se disfruta más.</em></h1>
+      <p>Descubre lugares con fotografías reales, organiza experiencias, cuida tu presupuesto y adapta el plan cuando algo cambia.</p>
+    </div>
+  </div>
+  <div class="login-form">
+    <div class="brand dark">✈ <span>TravelPlanner <b>Flex</b></span></div>
+    <span class="eyebrow">TU ESPACIO DE VIAJE</span>
+    <form id="login-form" class="auth-form">
+      <h2>Bienvenido</h2>
+      <p>Inicia sesión para continuar con tus viajes.</p>
+      <label for="email">Correo electrónico</label>
+      <input id="email" name="email" type="email" placeholder="tu@correo.com" required autocomplete="email">
+      <label for="password">Contraseña</label>
+      <input id="password" name="password" type="password" placeholder="Tu contraseña" required autocomplete="current-password">
+      <button class="btn primary full" type="submit">Iniciar sesión →</button>
+      <p class="auth-switch">¿Todavía no tienes cuenta? <button type="button" id="show-register">Crear una cuenta</button></p>
+    </form>
+    <form id="register-form" class="auth-form hidden">
+      <h2>Crea tu cuenta</h2>
+      <p>Tus viajes se guardarán y estarán disponibles desde PC y celular.</p>
+      <label for="reg-name">Nombre</label>
+      <input id="reg-name" name="nombre" type="text" placeholder="Tu nombre" required minlength="2" maxlength="100" autocomplete="name">
+      <label for="reg-email">Correo electrónico</label>
+      <input id="reg-email" name="email" type="email" placeholder="tu@correo.com" required autocomplete="email">
+      <label for="reg-password">Contraseña (mínimo 10 caracteres)</label>
+      <input id="reg-password" name="password" type="password" placeholder="Crea una contraseña segura" required minlength="10" autocomplete="new-password">
+      <button class="btn primary full" type="submit">Crear cuenta →</button>
+      <p class="auth-switch">¿Ya tienes cuenta? <button type="button" id="show-login">Iniciar sesión</button></p>
+    </form>
+    <div class="login-note">Tus viajes son privados para tu cuenta. Usa una contraseña única y no compartas tus datos de acceso.</div>
+  </div>
+</div>
+
+<div id="shell" class="shell hidden">
+  <aside class="sidebar">
+    <div class="brand">✈ <span>TravelPlanner <b>Flex</b></span></div>
+    <div class="side-caption">EXPLORA SIN COMPLICARTE</div>
+    <nav id="side-nav">
+      <button data-nav="inicio">⌂ <span>Inicio</span></button>
+      <button data-nav="explorar">◈ <span>Descubrir lugares</span></button>
+      <button data-nav="agenda">▦ <span>Itinerario</span></button>
+      <button data-nav="reservas">▤ <span>Reservaciones</span></button>
+      <button data-nav="finanzas">◉ <span>Presupuesto y gastos</span></button>
+      <button data-nav="grupo">♧ <span>Viaje en grupo</span></button>
+      <button data-nav="ajustes">⚙ <span>Configuración</span></button>
+    </nav>
+    <div class="side-bottom"><p>✦ Planes que se adaptan a ti</p><small>Oaxaca · Veracruz · Puebla</small><small>Fotografías reales con atribución</small></div>
+  </aside>
+  <div class="main-pane">
+    <header class="topbar">
+      <div class="mobile-brand">✈ <b>TravelPlanner <span>Flex</span></b></div>
+      <div class="top-copy">Tu viaje, mejor pensado</div>
+      <div class="header-right"><select id="trip-select" aria-label="Viaje seleccionado"></select><button class="avatar" id="account-btn" title="Cerrar sesión">TF</button></div>
+    </header>
+    <main id="content" class="page" aria-live="polite"></main>
+  </div>
+  <div id="dock" class="journey-dock hidden"></div>
+  <nav class="mobile-nav" id="mobile-nav">
+    <button data-nav="inicio">⌂<small>Inicio</small></button>
+    <button data-nav="explorar">◈<small>Explorar</small></button>
+    <button data-nav="agenda">▦<small>Agenda</small></button>
+    <button data-nav="finanzas">◉<small>Gastos</small></button>
+    <button data-nav="grupo">♧<small>Grupo</small></button>
+    <button data-nav="reservas">▤<small>Reservas</small></button>
+  </nav>
+</div>
+<div id="modal-root"></div><div id="toast-root" role="status" aria-live="polite"></div>
+<script src="/static/app.js" defer></script>
+</body>
+</html>

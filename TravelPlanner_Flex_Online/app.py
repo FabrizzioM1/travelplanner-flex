@@ -1,0 +1,794 @@
+"""TravelPlanner Flex Online.
+Python + Flask + PostgreSQL (Railway) / SQLite (local development).
+"""
+from __future__ import annotations
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import sqlite3
+from contextlib import contextmanager
+from decimal import Decimal
+from urllib.request import urlopen
+from urllib.parse import urlparse
+
+from flask import Flask, g, jsonify, request, send_from_directory, session
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash, generate_password_hash
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # SQLite local can still run if psycopg is not installed.
+    psycopg = None
+    dict_row = None
+
+ROOT = Path(__file__).resolve().parent
+STATIC = ROOT / 'static'
+DB_PATH = Path(os.environ.get('TRAVELPLANNER_DB', str(ROOT / 'data' / 'travelplanner.sqlite3')))
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+IS_RAILWAY = bool(os.environ.get('RAILWAY_PUBLIC_DOMAIN') or os.environ.get('RAILWAY_ENVIRONMENT_NAME'))
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = 'postgresql://' + DATABASE_URL[len('postgres://'):]
+DESTINOS = {
+    'Oaxaca': (17.0654, -96.7237),
+    'Veracruz': (19.1738, -96.1342),
+    'Puebla': (19.0414, -98.2063),
+}
+
+# Fotografías reales seleccionadas manualmente de Wikimedia Commons.
+# Se conserva el enlace a la ficha original y la licencia junto a cada foto.
+PLACES = [
+ ('oax_culturas','Oaxaca','Museo de las Culturas de Oaxaca','Cultura','Museo;Historia;Bajo techo',17.0660,-96.7212,
+  'https://upload.wikimedia.org/wikipedia/commons/9/98/Museo_de_las_Culturas_de_Oaxaca.jpg',100,100,1,
+  'Recinto cultural instalado en el exconvento de Santo Domingo. La fotografía muestra el entorno del museo.',
+  'EdsonCid','CC BY-SA 3.0','https://commons.wikimedia.org/wiki/File:Museo_de_las_Culturas_de_Oaxaca.jpg'),
+ ('oax_textil','Oaxaca','Museo Textil de Oaxaca','Cultura','Museo;Artesanía;Bajo techo',17.0597,-96.7231,
+  'https://upload.wikimedia.org/wikipedia/commons/b/b2/Museo_Textil_de_Oaxaca_%28MTO%29.jpg',0,75,1,
+  'Espacio cultural dedicado a los textiles, técnicas y tradiciones de Oaxaca, México y otras regiones.',
+  'ArribalaLuna','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Museo_Textil_de_Oaxaca_(MTO).jpg'),
+ ('oax_hierve','Oaxaca','Hierve el Agua','Naturaleza','Mirador;Exterior;Excursión',16.8643,-96.2753,
+  'https://upload.wikimedia.org/wikipedia/commons/7/76/Hierve_el_agua%2C_Oaxaca.jpg',280,180,0,
+  'Paisaje natural de formaciones minerales y pozas; requiere desplazamiento fuera de la ciudad de Oaxaca.',
+  'JishaBP','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Hierve_el_agua,_Oaxaca.jpg'),
+ ('oax_mercado','Oaxaca','Mercado 20 de Noviembre','Gastronomía','Comida;Mercado;Bajo techo',17.0586,-96.7264,
+  'https://upload.wikimedia.org/wikipedia/commons/8/88/Mercado_a_20_Noviembre%2C_Oaxaca.jpg',220,75,1,
+  'Mercado tradicional conocido por su oferta gastronómica y el pasillo de carnes asadas.',
+  'Dan Nevill','CC BY 2.0','https://commons.wikimedia.org/wiki/File:Mercado_a_20_Noviembre,_Oaxaca.jpg'),
+ ('oax_monte','Oaxaca','Monte Albán','Historia','Arqueología;Exterior;Excursión',17.0432,-96.7671,
+  'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Monte_Alb%C3%A1n_en_Oaxaca.jpg/960px-Monte_Alb%C3%A1n_en_Oaxaca.jpg',160,150,0,
+  'Zona arqueológica zapoteca ubicada en los Valles Centrales de Oaxaca; visita principalmente al aire libre.',
+  'Minkyroa','CC BY 4.0','https://commons.wikimedia.org/wiki/File:Monte_Alb%C3%A1n_en_Oaxaca.jpg'),
+ ('oax_jardin','Oaxaca','Jardín Etnobotánico de Oaxaca','Naturaleza','Jardín;Exterior;Cultura',17.0663,-96.7215,
+  'https://upload.wikimedia.org/wikipedia/commons/1/18/Jard%C3%ADn_Etnobot%C3%A1nico_%28Oaxaca%2C_Oaxaca%29.jpg',120,90,0,
+  'Jardín con especies vegetales nativas y colecciones botánicas vinculadas con la región.',
+  'A1437053','CC BY-SA 3.0','https://commons.wikimedia.org/wiki/File:Jard%C3%ADn_Etnobot%C3%A1nico_(Oaxaca,_Oaxaca).jpg'),
+ ('ver_ulua','Veracruz','San Juan de Ulúa','Historia','Fortaleza;Exterior;Historia',19.2089,-96.1353,
+  'https://upload.wikimedia.org/wikipedia/commons/d/d8/Fuerte_San_Juan_de_Ul%C3%BAa.jpg',120,120,0,
+  'Fortaleza histórica junto al puerto de Veracruz; verifica disponibilidad y horarios antes de visitar.',
+  'Yobahi','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Fuerte_San_Juan_de_Ul%C3%BAa.jpg'),
+ ('ver_naval','Veracruz','Museo Naval México','Cultura','Museo;Historia;Bajo techo',19.1989,-96.1358,
+  'https://upload.wikimedia.org/wikipedia/commons/7/7a/Museo_Naval_M%C3%A9xico_04.jpg',100,90,1,
+  'Museo dedicado a la historia marítima y naval de México, ubicado en el centro de Veracruz.',
+  'WendyAvilesR','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Museo_Naval_M%C3%A9xico_04.jpg'),
+ ('ver_malecon','Veracruz','Malecón de Veracruz','Paseo','Paseo;Exterior;Mar',19.2031,-96.1324,
+  'https://upload.wikimedia.org/wikipedia/commons/c/c4/Malec%C3%B3n_de_Veracruz.jpg',0,90,0,
+  'Paseo público junto al puerto y la costa; ideal para caminar y contemplar la actividad portuaria.',
+  'Koffermejia','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Malec%C3%B3n_de_Veracruz.jpg'),
+ ('ver_acuario','Veracruz','Acuario de Veracruz','Naturaleza','Acuario;Bajo techo;Familia',19.1892,-96.1230,
+  'https://upload.wikimedia.org/wikipedia/commons/6/63/Nuevo_Acuarium_de_Veracruz.jpg',230,120,1,
+  'Acuario del puerto de Veracruz. La foto muestra el acceso remodelado en 2024.',
+  'Skavania','CC BY 4.0','https://commons.wikimedia.org/wiki/File:Nuevo_Acuarium_de_Veracruz.jpg'),
+ ('pue_amparo','Puebla','Museo Amparo','Cultura','Museo;Arte;Bajo techo',19.0389,-98.1981,
+  'https://upload.wikimedia.org/wikipedia/commons/5/57/Vista_del_Museo_Amparo_Puebla_M%C3%A9xico.JPG',100,90,1,
+  'Museo con colecciones de arte prehispánico, virreinal y contemporáneo en el centro de Puebla.',
+  'ALVivaldi','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Vista_del_Museo_Amparo_Puebla_M%C3%A9xico.JPG'),
+ ('pue_biblio','Puebla','Biblioteca Palafoxiana','Historia','Biblioteca;Cultura;Bajo techo',19.0422,-98.1980,
+  'https://upload.wikimedia.org/wikipedia/commons/c/cc/Biblioteca_Palafoxiana_de_Puebla.jpg',60,65,1,
+  'Biblioteca histórica fundada en 1646, reconocida por su colección y mobiliario antiguo.',
+  'ProtoplasmaKid','CC BY-SA 4.0','https://commons.wikimedia.org/wiki/File:Biblioteca_Palafoxiana_de_Puebla.jpg'),
+]
+
+SCHEMA = """
+PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS usuario (
+ id_usuario INTEGER PRIMARY KEY AUTOINCREMENT,
+ nombre TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, creado TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS viaje (
+ id_viaje INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_usuario INTEGER NOT NULL REFERENCES usuario(id_usuario) ON DELETE CASCADE,
+ nombre TEXT NOT NULL CHECK(length(trim(nombre)) > 0), destino TEXT NOT NULL,
+ fecha_inicio TEXT NOT NULL, fecha_fin TEXT NOT NULL,
+ num_viajeros INTEGER NOT NULL DEFAULT 1 CHECK(num_viajeros BETWEEN 1 AND 100),
+ notas TEXT DEFAULT '', CHECK (fecha_fin >= fecha_inicio)
+);
+CREATE TABLE IF NOT EXISTS hospedaje (
+ id_hospedaje INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ nombre TEXT NOT NULL, direccion TEXT DEFAULT '', fecha_entrada TEXT NOT NULL,
+ fecha_salida TEXT NOT NULL, costo REAL NOT NULL DEFAULT 0 CHECK(costo>=0),
+ num_reservacion TEXT DEFAULT '', estado TEXT NOT NULL DEFAULT 'pendiente'
+ CHECK(estado IN ('pendiente','reservado','pagado')),
+ CHECK(fecha_salida > fecha_entrada)
+);
+CREATE TABLE IF NOT EXISTS transporte (
+ id_transporte INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ tipo TEXT NOT NULL CHECK(tipo IN ('avion','autobus','auto','tren','otro')),
+ origen TEXT NOT NULL, destino TEXT NOT NULL, fecha_hora_salida TEXT NOT NULL,
+ fecha_hora_llegada TEXT DEFAULT '', costo REAL NOT NULL DEFAULT 0 CHECK(costo>=0),
+ num_reservacion TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS itinerario (
+ id_itinerario INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ fecha TEXT NOT NULL, titulo TEXT DEFAULT '', descripcion TEXT DEFAULT '', UNIQUE(id_viaje,fecha)
+);
+CREATE TABLE IF NOT EXISTS actividad (
+ id_actividad INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_itinerario INTEGER NOT NULL REFERENCES itinerario(id_itinerario) ON DELETE CASCADE,
+ nombre TEXT NOT NULL, hora_inicio TEXT NOT NULL,
+ duracion_min INTEGER NOT NULL DEFAULT 90 CHECK(duracion_min>0),
+ lugar TEXT DEFAULT '', costo_estimado REAL NOT NULL DEFAULT 0 CHECK(costo_estimado>=0),
+ categoria TEXT NOT NULL DEFAULT 'Cultura', lugar_id TEXT DEFAULT '',
+ estado TEXT NOT NULL DEFAULT 'planeada' CHECK(estado IN ('planeada','realizada','cancelada'))
+);
+CREATE TABLE IF NOT EXISTS presupuesto (
+ id_presupuesto INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL UNIQUE REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ monto_total REAL NOT NULL CHECK(monto_total>=0), moneda TEXT NOT NULL DEFAULT 'MXN'
+);
+CREATE TABLE IF NOT EXISTS presupuesto_categoria (
+ id_pc INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_presupuesto INTEGER NOT NULL REFERENCES presupuesto(id_presupuesto) ON DELETE CASCADE,
+ categoria TEXT NOT NULL, monto REAL NOT NULL CHECK(monto>=0), UNIQUE(id_presupuesto,categoria)
+);
+CREATE TABLE IF NOT EXISTS viajero (
+ id_viajero INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE, nombre TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gasto (
+ id_gasto INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ concepto TEXT NOT NULL, monto REAL NOT NULL CHECK(monto>=0), moneda TEXT NOT NULL DEFAULT 'MXN',
+ fecha TEXT NOT NULL, categoria TEXT NOT NULL, metodo_pago TEXT DEFAULT 'Efectivo',
+ id_pagador INTEGER REFERENCES viajero(id_viajero) ON DELETE SET NULL,
+ compartido INTEGER NOT NULL DEFAULT 0 CHECK(compartido IN (0,1))
+);
+CREATE TABLE IF NOT EXISTS lugar (
+ id_lugar TEXT PRIMARY KEY, ciudad TEXT NOT NULL, nombre TEXT NOT NULL, categoria TEXT NOT NULL,
+ etiquetas TEXT NOT NULL, lat REAL, lon REAL, imagen TEXT NOT NULL, precio_estimado REAL NOT NULL,
+ duracion_min INTEGER NOT NULL, interior INTEGER NOT NULL, descripcion TEXT NOT NULL,
+ credito TEXT NOT NULL DEFAULT '', licencia TEXT NOT NULL DEFAULT '', fuente TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS preferencia (
+ id_preferencia INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ categoria TEXT NOT NULL, UNIQUE(id_viaje,categoria)
+);
+CREATE TABLE IF NOT EXISTS voto (
+ id_voto INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viajero INTEGER NOT NULL REFERENCES viajero(id_viajero) ON DELETE CASCADE,
+ id_lugar TEXT NOT NULL REFERENCES lugar(id_lugar), decision INTEGER NOT NULL CHECK(decision IN (-1,1)),
+ UNIQUE(id_viajero,id_lugar)
+);
+CREATE TABLE IF NOT EXISTS alternativa_actividad (
+ id_alternativa INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_actividad INTEGER NOT NULL REFERENCES actividad(id_actividad) ON DELETE CASCADE,
+ id_lugar TEXT NOT NULL REFERENCES lugar(id_lugar), motivo TEXT NOT NULL,
+ fecha_propuesta TEXT NOT NULL, aplicada INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS escenario_viaje (
+ id_escenario INTEGER PRIMARY KEY AUTOINCREMENT,
+ id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+ descripcion TEXT NOT NULL, impacto_estimado REAL NOT NULL DEFAULT 0, creado TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_viaje_usuario ON viaje(id_usuario);
+CREATE INDEX IF NOT EXISTS ix_itinerario_viaje_fecha ON itinerario(id_viaje,fecha);
+"""
+SCHEMA_PG = re.sub(r'\bREAL\b', 'DOUBLE PRECISION', SCHEMA.replace('PRAGMA foreign_keys=ON;', '')
+             .replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY'))
+
+PK_MAP = {
+ 'usuario':'id_usuario','viaje':'id_viaje','hospedaje':'id_hospedaje','transporte':'id_transporte',
+ 'itinerario':'id_itinerario','actividad':'id_actividad','presupuesto':'id_presupuesto',
+ 'presupuesto_categoria':'id_pc','viajero':'id_viajero','gasto':'id_gasto','preferencia':'id_preferencia',
+ 'voto':'id_voto','alternativa_actividad':'id_alternativa','escenario_viaje':'id_escenario'
+}
+
+ENTITY = {
+ "hospedaje": ("hospedaje", "id_hospedaje", ["id_viaje","nombre","direccion","fecha_entrada","fecha_salida","costo","num_reservacion","estado"]),
+ "transporte": ("transporte", "id_transporte", ["id_viaje","tipo","origen","destino","fecha_hora_salida","fecha_hora_llegada","costo","num_reservacion"]),
+ "itinerario": ("itinerario", "id_itinerario", ["id_viaje","fecha","titulo","descripcion"]),
+ "actividad": ("actividad", "id_actividad", ["id_itinerario","nombre","hora_inicio","duracion_min","lugar","costo_estimado","categoria","lugar_id","estado"]),
+ "gasto": ("gasto", "id_gasto", ["id_viaje","concepto","monto","moneda","fecha","categoria","metodo_pago","id_pagador","compartido"]),
+ "viajero": ("viajero", "id_viajero", ["id_viaje","nombre"]),
+ "preferencia": ("preferencia", "id_preferencia", ["id_viaje","categoria"]),
+ "presupuesto_categoria": ("presupuesto_categoria", "id_pc", ["id_presupuesto","categoria","monto"]),
+}
+
+class HybridRow(dict):
+    """Fila compatible con row['campo'] y row[0], como sqlite3.Row."""
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+class CursorProxy:
+    def __init__(self, cursor, lastrowid=None): self.cursor=cursor; self.lastrowid=lastrowid
+    def fetchone(self):
+        item=self.cursor.fetchone()
+        return HybridRow(item) if item is not None and isinstance(item, dict) else item
+    def fetchall(self):
+        items=self.cursor.fetchall()
+        return [HybridRow(item) if isinstance(item, dict) else item for item in items]
+    @property
+    def rowcount(self): return self.cursor.rowcount
+
+class PostgresCompat:
+    """Adaptador pequeño para conservar las consultas parametrizadas del prototipo SQLite."""
+    def __init__(self, conn): self.conn=conn
+    def execute(self, sql, params=()):
+        sql=sql.replace('INSERT OR IGNORE INTO','INSERT INTO').replace('?', '%s')
+        if sql.lstrip().upper().startswith('PRAGMA'):
+            return CursorProxy(self.conn.execute('SELECT 1'))
+        lastrowid=None
+        if sql.lstrip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper():
+            match=re.search(r'INSERT\s+INTO\s+([a-z_]+)', sql, re.I)
+            table=match.group(1).lower() if match else None
+            if table in PK_MAP and 'DO NOTHING' not in sql.upper():
+                pk=PK_MAP[table]
+                sql += f' RETURNING {pk}'
+                cur=self.conn.execute(sql, params)
+                returned=cur.fetchone()
+                lastrowid=returned[pk] if returned else None
+                return CursorProxy(cur,lastrowid)
+        cur=self.conn.execute(sql, params)
+        return CursorProxy(cur,lastrowid)
+    def executemany(self, sql, seq):
+        ignore='INSERT OR IGNORE INTO' in sql.upper()
+        sql=sql.replace('INSERT OR IGNORE INTO','INSERT INTO').replace('?', '%s')
+        if ignore and 'ON CONFLICT' not in sql.upper(): sql += ' ON CONFLICT DO NOTHING'
+        cur=self.conn.cursor(); cur.executemany(sql, list(seq)); return CursorProxy(cur)
+    def executescript(self, script):
+        for statement in script.split(';'):
+            statement=statement.strip()
+            if statement: self.execute(statement)
+    def __getattr__(self,name): return getattr(self.conn,name)
+
+class UserError(Exception):
+    def __init__(self, msg, status=400): super().__init__(msg); self.status=status
+
+@contextmanager
+def connect():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if DATABASE_URL:
+        if psycopg is None: raise RuntimeError('Instala psycopg[binary] para usar PostgreSQL.')
+        raw = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=12)
+        db = PostgresCompat(raw)
+    else:
+        raw = sqlite3.connect(DB_PATH, timeout=12)
+        raw.row_factory = sqlite3.Row
+        raw.execute('PRAGMA foreign_keys=ON')
+        db = raw
+    try:
+        yield db
+        raw.commit()
+    except Exception:
+        raw.rollback()
+        raise
+    finally:
+        raw.close()
+
+def now(): return dt.datetime.now().isoformat(timespec="seconds")
+def _plain_record(record):
+    return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in dict(record).items()}
+def rows(db,sql,params=()):return [_plain_record(x) for x in db.execute(sql,params)]
+def row(db,sql,params=()):
+    r=db.execute(sql,params).fetchone();return _plain_record(r) if r else None
+
+def init_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with connect() as db:
+        db.executescript(SCHEMA_PG if DATABASE_URL else SCHEMA)
+        for place in PLACES:
+            item = list(place)
+            local_photo = STATIC / 'img' / 'real' / f"{item[0]}.jpg"
+            image_value = f"/static/img/real/{item[0]}.jpg" if local_photo.is_file() else item[7]
+            item[7] = image_value
+            db.execute(
+                "INSERT INTO lugar (id_lugar,ciudad,nombre,categoria,etiquetas,lat,lon,imagen,precio_estimado,duracion_min,interior,descripcion,credito,licencia,fuente) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id_lugar) DO NOTHING",
+                tuple(item),
+            )
+            db.execute('UPDATE lugar SET imagen=?,credito=?,licencia=?,fuente=? WHERE id_lugar=?',
+                       (image_value, item[12], item[13], item[14], item[0]))
+
+def date_value(v,label="Fecha"):
+    try:
+        parsed=dt.date.fromisoformat(str(v));return parsed
+    except Exception: raise UserError(f"{label} inválida: usa AAAA-MM-DD.")
+
+def time_value(v,label="Hora"):
+    try:return dt.datetime.strptime(str(v),"%H:%M").time()
+    except Exception:raise UserError(f"{label} inválida: usa HH:MM.")
+
+def money(v,label="Monto"):
+    try:f=float(v)
+    except (ValueError,TypeError):raise UserError(f"{label}: escribe un número.")
+    if not 0<=f<=100000000:raise UserError(f"{label}: debe ser un importe positivo.")
+    return round(f,2)
+
+def required(data,fields):
+    for x in fields:
+        if data.get(x) is None or str(data[x]).strip()=="":raise UserError(f"El campo {x} es obligatorio.")
+
+def trip(db, tid):
+    t = row(db, "SELECT * FROM viaje WHERE id_viaje=? AND id_usuario=?", (tid, current_user_id()))
+    if not t:
+        raise UserError("Viaje no encontrado o no tienes permiso para consultarlo.", 404)
+    return t
+
+def trip_for_child(db, table,pk,rid):
+    if table=="actividad":
+        a=row(db,"SELECT i.id_viaje FROM actividad a JOIN itinerario i ON i.id_itinerario=a.id_itinerario WHERE a.id_actividad=?",(rid,))
+    elif table=="presupuesto_categoria":
+        a=row(db,"SELECT p.id_viaje FROM presupuesto_categoria c JOIN presupuesto p ON c.id_presupuesto=p.id_presupuesto WHERE c.id_pc=?",(rid,))
+    elif table=="preferencia":a=row(db,"SELECT id_viaje FROM preferencia WHERE id_preferencia=?",(rid,))
+    else:a=row(db,f"SELECT id_viaje FROM {table} WHERE {pk}=?",(rid,))
+    if not a:raise UserError("Registro no encontrado.",404)
+    return trip(db,a['id_viaje'])
+
+def owner_trip(db,table,payload):
+    if table=="actividad":
+        a=row(db,"SELECT id_viaje FROM itinerario WHERE id_itinerario=?",(payload.get("id_itinerario"),))
+        if not a:raise UserError("Crea primero un día del itinerario.")
+        return trip(db,a['id_viaje'])
+    if table=="presupuesto_categoria":
+        a=row(db,"SELECT id_viaje FROM presupuesto WHERE id_presupuesto=?",(payload.get("id_presupuesto"),))
+        if not a:raise UserError("Primero guarda el presupuesto.")
+        return trip(db,a['id_viaje'])
+    return trip(db,payload.get("id_viaje"))
+
+def validate_item(db,table,data,existing=None):
+    t=owner_trip(db,table,data)
+    for k in ["costo","costo_estimado","monto"]:
+        if k in data:data[k]=money(data[k],k)
+    if table=="hospedaje":
+        required(data,["nombre","fecha_entrada","fecha_salida","estado"])
+        a=date_value(data['fecha_entrada']);b=date_value(data['fecha_salida'])
+        if b<=a:raise UserError("La salida debe ser posterior a la entrada.")
+        if not(date_value(t['fecha_inicio'])<=a<=date_value(t['fecha_fin'])):raise UserError("La entrada debe estar dentro del viaje.")
+        if b>date_value(t['fecha_fin'])+dt.timedelta(days=1):raise UserError("La salida debe coincidir con el viaje o el día siguiente.")
+        if data['estado'] not in ['pendiente','reservado','pagado']:raise UserError("Estado inválido.")
+    if table=="transporte":
+        required(data,["tipo","origen","destino","fecha_hora_salida"])
+        try:
+            a=dt.datetime.fromisoformat(data['fecha_hora_salida']);
+            if data.get('fecha_hora_llegada') and dt.datetime.fromisoformat(data['fecha_hora_llegada'])<a:raise UserError("La llegada no puede ser anterior a la salida.")
+        except ValueError:raise UserError("Fecha y hora inválidas.")
+    if table=="itinerario":
+        required(data,['fecha']);day=date_value(data['fecha'])
+        if not(date_value(t['fecha_inicio'])<=day<=date_value(t['fecha_fin'])):raise UserError("El día debe estar dentro de las fechas del viaje.")
+    if table=="actividad":
+        required(data,['nombre','hora_inicio','categoria']);time_value(data['hora_inicio'])
+        if not 0 < int(data.get('duracion_min',90))<=1440:raise UserError("Duración inválida.")
+        if data.get('lugar_id') and not row(db,"SELECT 1 FROM lugar WHERE id_lugar=?",(data['lugar_id'],)):
+            raise UserError("Lugar del catálogo no encontrado.")
+    if table=="gasto":
+        required(data,['concepto','fecha','categoria','moneda']);date_value(data['fecha'])
+        if data['moneda'] != (row(db,'SELECT moneda FROM presupuesto WHERE id_viaje=?',(t['id_viaje'],)) or {'moneda':'MXN'})['moneda']:
+            raise UserError('La moneda del gasto debe ser la del presupuesto. No convertimos divisas automáticamente.')
+        if data.get('id_pagador'):
+            payer=row(db,'SELECT id_viaje FROM viajero WHERE id_viajero=?',(data['id_pagador'],))
+            if not payer or payer['id_viaje']!=t['id_viaje']:raise UserError('El pagador debe pertenecer al viaje.')
+    if table=='viajero':required(data,['nombre'])
+    if table=='preferencia':required(data,['categoria'])
+    if table=='presupuesto_categoria':required(data,['categoria'])
+    return t
+
+def budget_data(db,tid):
+    p=row(db,'SELECT * FROM presupuesto WHERE id_viaje=?',(tid,)) or {'id_presupuesto':None,'monto_total':0.0,'moneda':'MXN'}
+    real=db.execute('SELECT COALESCE(SUM(monto),0) FROM gasto WHERE id_viaje=?',(tid,)).fetchone()[0]
+    planned_h=db.execute('SELECT COALESCE(SUM(costo),0) FROM hospedaje WHERE id_viaje=?',(tid,)).fetchone()[0]
+    planned_t=db.execute('SELECT COALESCE(SUM(costo),0) FROM transporte WHERE id_viaje=?',(tid,)).fetchone()[0]
+    planned_a=db.execute('SELECT COALESCE(SUM(a.costo_estimado),0) FROM actividad a JOIN itinerario i ON i.id_itinerario=a.id_itinerario WHERE i.id_viaje=? AND a.estado!=\'cancelada\'',(tid,)).fetchone()[0]
+    total=round(planned_h+planned_t+planned_a,2)
+    return {'presupuesto':p,'gasto_real':round(real,2),'saldo':round(p['monto_total']-real,2),
+            'porcentaje':round(real/p['monto_total']*100,1) if p['monto_total'] else 0,
+            'estimado_hospedaje':round(planned_h,2),'estimado_transporte':round(planned_t,2),
+            'estimado_actividades':round(planned_a,2),'estimado_total':total,
+            'categorias':rows(db,'SELECT * FROM presupuesto_categoria WHERE id_presupuesto=?',(p['id_presupuesto'],)) if p['id_presupuesto'] else [],
+            'gastado_categorias':rows(db,'SELECT categoria,SUM(monto) total FROM gasto WHERE id_viaje=? GROUP BY categoria',(tid,))}
+
+def check_warnings(t,days, bud, expenses):
+    warnings=[]
+    if bud['presupuesto']['monto_total']>0 and bud['saldo']<0:
+        warnings.append({'level':'danger','text':f"Los gastos reales superan el presupuesto por ${-bud['saldo']:,.0f} MXN."})
+    if bud['presupuesto']['monto_total']>0 and bud['estimado_total']>bud['presupuesto']['monto_total']:
+        warnings.append({'level':'warn','text':'Los costos previstos de hospedaje, transporte y actividades superan el presupuesto.'})
+    for d in days:
+        active=sorted([a for a in d['actividades'] if a['estado']!='cancelada'],key=lambda a:a['hora_inicio'])
+        for a,b in zip(active,active[1:]):
+            am=int(a['hora_inicio'][:2])*60+int(a['hora_inicio'][3:5])+a['duracion_min']
+            bm=int(b['hora_inicio'][:2])*60+int(b['hora_inicio'][3:5])
+            if am>bm: warnings.append({'level':'warn','text':f"Actividades encimadas el {d['fecha']}: {a['nombre']} y {b['nombre']}."})
+    return warnings
+
+def detail(db,tid):
+    t=trip(db,tid)
+    days=rows(db,'SELECT * FROM itinerario WHERE id_viaje=? ORDER BY fecha',(tid,))
+    for d in days:
+        d['actividades']=rows(db,"""SELECT a.*,l.imagen,l.interior,l.lat,l.lon,l.descripcion AS descripcion_lugar
+                    FROM actividad a LEFT JOIN lugar l ON l.id_lugar=a.lugar_id
+                    WHERE a.id_itinerario=? ORDER BY a.hora_inicio""",(d['id_itinerario'],))
+    b=budget_data(db,tid)
+    expenses=rows(db,'SELECT g.*,v.nombre AS pagador FROM gasto g LEFT JOIN viajero v ON v.id_viajero=g.id_pagador WHERE g.id_viaje=? ORDER BY g.fecha DESC,g.id_gasto DESC',(tid,))
+    travelers=rows(db,'SELECT * FROM viajero WHERE id_viaje=? ORDER BY id_viajero',(tid,))
+    votos=rows(db,"""SELECT v.id_lugar, l.nombre AS lugar, SUM(CASE WHEN v.decision=1 THEN 1 ELSE 0 END) si, SUM(CASE WHEN v.decision=-1 THEN 1 ELSE 0 END) no
+          FROM voto v JOIN viajero t ON v.id_viajero=t.id_viajero JOIN lugar l ON v.id_lugar=l.id_lugar WHERE t.id_viaje=? GROUP BY v.id_lugar""",(tid,))
+    split={q['nombre']:{'pagado':0.0,'parte':0.0,'saldo':0.0} for q in travelers}
+    for ex in expenses:
+        if ex['compartido'] and ex['id_pagador'] is not None and travelers:
+            share=ex['monto']/len(travelers)
+            for q in travelers:split[q['nombre']]['parte']+=share
+            payer=next((q for q in travelers if q['id_viajero']==ex['id_pagador']),None)
+            if payer:split[payer['nombre']]['pagado']+=ex['monto']
+    for x in split.values():
+        x['pagado']=round(x['pagado'],2);x['parte']=round(x['parte'],2);x['saldo']=round(x['pagado']-x['parte'],2)
+    return {'viaje':t,'dias':days,'hospedajes':rows(db,'SELECT * FROM hospedaje WHERE id_viaje=?',(tid,)),
+            'transportes':rows(db,'SELECT * FROM transporte WHERE id_viaje=?',(tid,)),
+            'presupuesto':b,'gastos':expenses,'viajeros':travelers,
+            'preferencias':[x['categoria'] for x in rows(db,'SELECT categoria FROM preferencia WHERE id_viaje=?',(tid,))],
+            'votos':votos,'reparto':split,'escenarios':rows(db,'SELECT * FROM escenario_viaje WHERE id_viaje=? ORDER BY id_escenario DESC',(tid,)),
+            'alertas':check_warnings(t,days,b,expenses)}
+
+def create_trip(db, p):
+    required(p, ['nombre','destino','fecha_inicio','fecha_fin'])
+    if p['destino'] not in DESTINOS: raise UserError('Selecciona uno de los destinos disponibles: Oaxaca, Veracruz o Puebla.')
+    if date_value(p['fecha_fin']) < date_value(p['fecha_inicio']): raise UserError('La fecha de finalización no puede ser anterior a la de inicio.')
+    count = int(p.get('num_viajeros', 1))
+    if not 1 <= count <= 100: raise UserError('El número de viajeros debe estar entre 1 y 100.')
+    cur = db.execute('INSERT INTO viaje(id_usuario,nombre,destino,fecha_inicio,fecha_fin,num_viajeros,notas) VALUES (?,?,?,?,?,?,?)',
+        (current_user_id(), p['nombre'].strip(), p['destino'], p['fecha_inicio'], p['fecha_fin'], count, p.get('notas','')))
+    tid = cur.lastrowid
+    db.execute('INSERT INTO presupuesto(id_viaje,monto_total,moneda) VALUES (?,?,?)', (tid, money(p.get('presupuesto',0)), 'MXN'))
+    return tid
+
+def recommend(db, tid, for_rain=False):
+    t = trip(db, tid)
+    data = rows(db, 'SELECT * FROM lugar WHERE ciudad=?', (t['destino'],))
+    prefs = {x['categoria'] for x in rows(db, 'SELECT categoria FROM preferencia WHERE id_viaje=?', (tid,))}
+    data.sort(key=lambda l: (-int(l['interior']) if for_rain else -int(l['categoria'] in prefs), -int(l['categoria'] in prefs), l['precio_estimado'], l['nombre']))
+    for l in data:
+        l['motivo'] = ('Bajo techo · Plan B ante lluvia' if for_rain and l['interior'] else 'Coincide con tus intereses' if l['categoria'] in prefs else 'Opción del catálogo')
+        l['imagen_url'] = l['imagen']
+    return data
+
+def planb_preview(db,activity_id,reason):
+    a=row(db,"""SELECT a.*,i.id_viaje,l.interior AS lugar_interior
+                     FROM actividad a JOIN itinerario i ON a.id_itinerario=i.id_itinerario
+                     LEFT JOIN lugar l ON l.id_lugar=a.lugar_id
+                     WHERE a.id_actividad=?""",(activity_id,))
+    if not a:raise UserError('Actividad no encontrada.',404)
+    t=trip(db,a['id_viaje'])
+    options=recommend(db,t['id_viaje'],reason=='lluvia')
+    options=[x for x in options if x['id_lugar']!=a['lugar_id'] and (reason!='lluvia' or x['interior'])]
+    for x in options:x['diferencia']=round(x['precio_estimado']-a['costo_estimado'],2)
+    return {'actividad':a,'motivo':reason,'opciones':options[:8]}
+
+def apply_planb(db,p):
+    required(p,['actividad_id','lugar_id','motivo'])
+    v=planb_preview(db,int(p['actividad_id']),str(p['motivo']))
+    chosen=next((x for x in v['opciones'] if x['id_lugar']==p['lugar_id']),None)
+    if not chosen:raise UserError('La alternativa elegida no está disponible en el catálogo filtrado.')
+    a=v['actividad'];old=a['costo_estimado'];tid=a['id_viaje']
+    db.execute("UPDATE actividad SET nombre=?, lugar=?, costo_estimado=?, duracion_min=?, categoria=?, lugar_id=? WHERE id_actividad=?",
+               (chosen['nombre'],chosen['nombre'],chosen['precio_estimado'],chosen['duracion_min'],chosen['categoria'],chosen['id_lugar'],a['id_actividad']))
+    db.execute("INSERT INTO alternativa_actividad(id_actividad,id_lugar,motivo,fecha_propuesta,aplicada) VALUES (?,?,?,?,1)",
+               (a['id_actividad'],chosen['id_lugar'],p['motivo'],now()))
+    db.execute('INSERT INTO escenario_viaje(id_viaje,descripcion,impacto_estimado,creado) VALUES (?,?,?,?)',
+               (tid,f"Cambio por {p['motivo']}: {a['nombre']} → {chosen['nombre']}",round(chosen['precio_estimado']-old,2),now()))
+    return {'mensaje':'Plan B aplicado al itinerario.','diferencia':round(chosen['precio_estimado']-old,2)}
+
+
+
+app = Flask(__name__, static_folder=None)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+if IS_RAILWAY and not os.environ.get('SECRET_KEY'):
+    raise RuntimeError('Configura SECRET_KEY en las variables de Railway antes de publicar.')
+
+app.config.update(
+    SECRET_KEY=os.environ.get('SECRET_KEY', 'local-only-change-this-secret-before-deploying'),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=IS_RAILWAY,
+    PERMANENT_SESSION_LIFETIME=dt.timedelta(days=14),
+    MAX_CONTENT_LENGTH=200_000,
+)
+
+
+def current_user_id():
+    return getattr(g, 'user_id', None)
+
+
+@app.before_request
+def load_account_and_protect_api():
+    g.user_id = session.get('user_id')
+    if request.path.startswith('/api/'):
+        public = request.path in ('/api/estado', '/api/login', '/api/register')
+        if not public and not g.user_id:
+            return jsonify({'error': 'Inicia sesión para continuar.'}), 401
+        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            expected = session.get('csrf_token', '')
+            supplied = request.headers.get('X-CSRF-Token', '')
+            if not expected or not secrets.compare_digest(expected, supplied):
+                return jsonify({'error': 'La sesión de seguridad venció. Recarga la página e inténtalo de nuevo.'}), 403
+
+
+@app.after_request
+def security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.errorhandler(UserError)
+def handle_user_error(error):
+    return jsonify({'error': str(error)}), error.status
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    app.logger.exception('TravelPlanner error: %s', error)
+    return jsonify({'error': 'Ocurrió un error inesperado. Revisa los registros del servidor.'}), 500
+
+
+@app.get('/health')
+def health():
+    return jsonify({'ok': True, 'database': 'postgresql' if DATABASE_URL else 'sqlite-local'})
+
+
+@app.get('/')
+def index():
+    return send_from_directory(STATIC, 'index.html')
+
+
+@app.get('/static/<path:filename>')
+def static_files(filename):
+    return send_from_directory(STATIC, filename)
+
+
+@app.get('/api/estado')
+def api_estado():
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_urlsafe(32)
+    return jsonify({'autenticado': bool(session.get('user_id')), 'csrf': session['csrf_token'], 'modo': 'online' if DATABASE_URL else 'local'})
+
+
+def login_user(user):
+    session.clear()
+    session['user_id'] = int(user['id_usuario'])
+    session['user_name'] = user['nombre']
+    session['csrf_token'] = secrets.token_urlsafe(32)
+    session.permanent = True
+    return {'ok': True, 'csrf': session['csrf_token'], 'nombre': user['nombre']}
+
+
+@app.post('/api/register')
+def api_register():
+    p = request.get_json(silent=True) or {}
+    nombre = str(p.get('nombre','')).strip()
+    email = str(p.get('email','')).strip().lower()
+    password = str(p.get('password',''))
+    if len(nombre) < 2 or len(nombre) > 100:
+        raise UserError('Escribe tu nombre (de 2 a 100 caracteres).')
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 180:
+        raise UserError('Escribe un correo electrónico válido.')
+    if len(password) < 10:
+        raise UserError('La contraseña debe tener al menos 10 caracteres.')
+    with connect() as db:
+        if row(db, 'SELECT id_usuario FROM usuario WHERE email=?', (email,)):
+            raise UserError('Ya existe una cuenta con ese correo. Inicia sesión.')
+        cur = db.execute('INSERT INTO usuario(nombre,email,password_hash,creado) VALUES (?,?,?,?)',
+                         (nombre, email, generate_password_hash(password), now()))
+        user = {'id_usuario': cur.lastrowid, 'nombre': nombre}
+    return jsonify(login_user(user)), 201
+
+
+@app.post('/api/login')
+def api_login():
+    p = request.get_json(silent=True) or {}
+    email = str(p.get('email','')).strip().lower()
+    password = str(p.get('password',''))
+    with connect() as db:
+        user = row(db, 'SELECT * FROM usuario WHERE email=?', (email,))
+    if not user or not check_password_hash(user['password_hash'], password):
+        raise UserError('Correo o contraseña incorrectos.', 401)
+    return jsonify(login_user(user))
+
+
+@app.post('/api/logout')
+def api_logout():
+    session.clear()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/<path:subpath>', methods=['GET','POST','PUT','DELETE'])
+def api_router(subpath):
+    path = '/api/' + subpath
+    method = request.method
+    qs = request.args
+    p = request.get_json(silent=True) or {}
+
+    if path == '/api/catalogo' and method == 'GET':
+        city = qs.get('ciudad','')
+        with connect() as db:
+            data = rows(db, 'SELECT * FROM lugar WHERE ciudad=? ORDER BY categoria,nombre', (city,)) if city else rows(db, 'SELECT * FROM lugar ORDER BY ciudad,categoria,nombre')
+        for item in data: item['imagen_url'] = item['imagen']
+        return jsonify({'lugares': data, 'destinos': list(DESTINOS.keys())})
+
+    if path == '/api/preferencias' and method == 'GET':
+        tid = qs.get('viaje','')
+        with connect() as db:
+            trip(db, tid)
+            return jsonify({'items': rows(db, 'SELECT * FROM preferencia WHERE id_viaje=?', (tid,))})
+
+    if path == '/api/viajes' and method == 'GET':
+        with connect() as db:
+            alltrips = rows(db, 'SELECT * FROM viaje WHERE id_usuario=? ORDER BY id_viaje DESC', (current_user_id(),))
+            for t in alltrips: t['resumen'] = budget_data(db, t['id_viaje'])
+        return jsonify({'viajes': alltrips})
+
+    if path == '/api/viajes' and method == 'POST':
+        with connect() as db: tid = create_trip(db, p)
+        return jsonify({'id_viaje': tid}), 201
+
+    bits = path.strip('/').split('/')
+    if len(bits) >= 3 and bits[:2] == ['api','viajes'] and bits[2].isdigit():
+        vid = int(bits[2])
+        with connect() as db:
+            if len(bits) == 3 and method == 'GET': return jsonify(detail(db, vid))
+            if len(bits) == 3 and method == 'DELETE':
+                trip(db, vid)
+                db.execute('DELETE FROM viaje WHERE id_viaje=? AND id_usuario=?', (vid, current_user_id()))
+                return jsonify({'ok': True})
+            if len(bits) == 3 and method == 'PUT':
+                old = trip(db, vid); merged = {**old, **p}
+                required(merged, ['nombre','destino','fecha_inicio','fecha_fin'])
+                if merged['destino'] not in DESTINOS: raise UserError('Destino no disponible.')
+                if date_value(merged['fecha_fin']) < date_value(merged['fecha_inicio']): raise UserError('Fechas invertidas.')
+                count = int(merged['num_viajeros'])
+                if count <= 0: raise UserError('Debes tener al menos un viajero.')
+                db.execute('UPDATE viaje SET nombre=?,destino=?,fecha_inicio=?,fecha_fin=?,num_viajeros=?,notas=? WHERE id_viaje=? AND id_usuario=?',
+                           (merged['nombre'],merged['destino'],merged['fecha_inicio'],merged['fecha_fin'],count,merged.get('notas',''),vid,current_user_id()))
+                return jsonify({'ok': True})
+            if len(bits) == 4 and bits[3] == 'recomendaciones' and method == 'GET':
+                return jsonify({'lugares': recommend(db, vid, qs.get('lluvia','0') == '1')})
+            if len(bits) == 4 and bits[3] == 'ruta' and method == 'GET':
+                trip(db, vid)
+                day = qs.get('fecha','')
+                acts = rows(db, """SELECT a.nombre,a.lugar_id,l.lat,l.lon FROM actividad a
+                    JOIN itinerario i ON i.id_itinerario=a.id_itinerario JOIN lugar l ON l.id_lugar=a.lugar_id
+                    WHERE i.id_viaje=? AND i.fecha=? AND a.estado!='cancelada'""", (vid,day))
+                if acts:
+                    ordered=[acts.pop(0)]
+                    while acts:
+                        here=ordered[-1]
+                        j=min(range(len(acts)), key=lambda k:(acts[k]['lat']-here['lat'])**2+(acts[k]['lon']-here['lon'])**2)
+                        ordered.append(acts.pop(j))
+                else: ordered=[]
+                return jsonify({'orden': ordered, 'aviso': 'Orden aproximado por proximidad geográfica; no son rutas, tiempos ni distancias viales.'})
+
+    if path == '/api/presupuesto' and method == 'POST':
+        required(p, ['id_viaje','monto_total','moneda'])
+        if p['moneda'] != 'MXN': raise UserError('El prototipo calcula pesos mexicanos (MXN).')
+        with connect() as db:
+            trip(db, p['id_viaje'])
+            db.execute('INSERT INTO presupuesto(id_viaje,monto_total,moneda) VALUES (?,?,?) ON CONFLICT(id_viaje) DO UPDATE SET monto_total=excluded.monto_total,moneda=excluded.moneda',
+                       (p['id_viaje'], money(p['monto_total']), 'MXN'))
+        return jsonify({'ok': True})
+
+    if path == '/api/voto' and method == 'POST':
+        required(p, ['id_viajero','id_lugar','decision'])
+        if int(p['decision']) not in (-1,1): raise UserError('Voto inválido.')
+        with connect() as db:
+            traveler = row(db, 'SELECT id_viaje FROM viajero WHERE id_viajero=?', (p['id_viajero'],))
+            if not traveler: raise UserError('Viajero desconocido.')
+            trip(db, traveler['id_viaje'])
+            if not row(db, 'SELECT id_lugar FROM lugar WHERE id_lugar=?', (p['id_lugar'],)): raise UserError('Lugar desconocido.')
+            db.execute('INSERT INTO voto(id_viajero,id_lugar,decision) VALUES (?,?,?) ON CONFLICT(id_viajero,id_lugar) DO UPDATE SET decision=excluded.decision',
+                       (p['id_viajero'],p['id_lugar'],int(p['decision'])))
+        return jsonify({'ok': True})
+
+    if path == '/api/planb' and method == 'POST':
+        with connect() as db: return jsonify(planb_preview(db, int(p.get('id_actividad',0)), p.get('motivo','lluvia')))
+
+    if path == '/api/planb/aplicar' and method == 'POST':
+        with connect() as db: return jsonify(apply_planb(db, p))
+
+    if path == '/api/exportar' and method == 'GET':
+        uid = current_user_id()
+        trip_filter = '(SELECT id_viaje FROM viaje WHERE id_usuario=?)'
+        with connect() as db:
+            content = {
+              'usuario': rows(db, 'SELECT id_usuario,nombre,email,creado FROM usuario WHERE id_usuario=?', (uid,)),
+              'viaje': rows(db, 'SELECT * FROM viaje WHERE id_usuario=?', (uid,)),
+              'hospedaje': rows(db, f'SELECT * FROM hospedaje WHERE id_viaje IN {trip_filter}', (uid,)),
+              'transporte': rows(db, f'SELECT * FROM transporte WHERE id_viaje IN {trip_filter}', (uid,)),
+              'itinerario': rows(db, f'SELECT * FROM itinerario WHERE id_viaje IN {trip_filter}', (uid,)),
+              'actividad': rows(db, f'SELECT a.* FROM actividad a JOIN itinerario i ON i.id_itinerario=a.id_itinerario WHERE i.id_viaje IN {trip_filter}', (uid,)),
+              'presupuesto': rows(db, f'SELECT * FROM presupuesto WHERE id_viaje IN {trip_filter}', (uid,)),
+              'presupuesto_categoria': rows(db, f'SELECT c.* FROM presupuesto_categoria c JOIN presupuesto p ON p.id_presupuesto=c.id_presupuesto WHERE p.id_viaje IN {trip_filter}', (uid,)),
+              'gasto': rows(db, f'SELECT * FROM gasto WHERE id_viaje IN {trip_filter}', (uid,)),
+              'viajero': rows(db, f'SELECT * FROM viajero WHERE id_viaje IN {trip_filter}', (uid,)),
+              'preferencia': rows(db, f'SELECT * FROM preferencia WHERE id_viaje IN {trip_filter}', (uid,)),
+              'voto': rows(db, f'SELECT v.* FROM voto v JOIN viajero t ON t.id_viajero=v.id_viajero WHERE t.id_viaje IN {trip_filter}', (uid,)),
+              'alternativa_actividad': rows(db, f'SELECT a.* FROM alternativa_actividad a JOIN actividad x ON x.id_actividad=a.id_actividad JOIN itinerario i ON i.id_itinerario=x.id_itinerario WHERE i.id_viaje IN {trip_filter}', (uid,)),
+              'escenario_viaje': rows(db, f'SELECT * FROM escenario_viaje WHERE id_viaje IN {trip_filter}', (uid,)),
+              'lugar': rows(db, 'SELECT * FROM lugar ORDER BY ciudad,nombre'),
+            }
+        return jsonify({'version':'2.0','fecha_exportacion':now(),'datos':content})
+
+    if path == '/api/clima' and method == 'GET':
+        city = qs.get('ciudad','')
+        if city not in DESTINOS: raise UserError('Ciudad no disponible.')
+        lat,lon = DESTINOS[city]
+        uri = f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_probability_max,temperature_2m_max&timezone=America%2FMexico_City&forecast_days=7'
+        try:
+            with urlopen(uri, timeout=4) as response: forecast=json.load(response)
+            return jsonify({'fuente':'Open-Meteo','clima':forecast['daily'],'es_pronostico_real':True,'nota':'Pronóstico a corto plazo; no corresponde a viajes fuera del período consultado.'})
+        except Exception:
+            return jsonify({'fuente':'sin conexion','clima':None,'es_pronostico_real':False,'nota':'No se pudo consultar el pronóstico; Plan B manual sigue disponible.'})
+
+    if len(bits) >= 2 and bits[0] == 'api' and bits[1] in ENTITY:
+        table = bits[1]; sqltable, pk, allowed = ENTITY[table]
+        rid = int(bits[2]) if len(bits)==3 and bits[2].isdigit() else None
+        if method == 'POST' and len(bits)==2:
+            data = {k:p[k] for k in allowed if k in p}
+            with connect() as db:
+                validate_item(db, table, data)
+                if table == 'presupuesto_categoria':
+                    db.execute('INSERT INTO presupuesto_categoria(id_presupuesto,categoria,monto) VALUES (?,?,?) ON CONFLICT(id_presupuesto,categoria) DO UPDATE SET monto=excluded.monto',
+                               (data['id_presupuesto'],data['categoria'],data['monto']))
+                    return jsonify({'ok':True}), 201
+                keys=list(data.keys())
+                if not keys: raise UserError('Campos vacíos.')
+                cur=db.execute(f"INSERT INTO {sqltable} ({','.join(keys)}) VALUES ({','.join('?' for _ in keys)})", [data[x] for x in keys])
+                return jsonify({'id':cur.lastrowid}), 201
+        if rid is not None and method in ('PUT','DELETE'):
+            with connect() as db:
+                trip_for_child(db, table, pk, rid)
+                if method == 'DELETE':
+                    db.execute(f'DELETE FROM {sqltable} WHERE {pk}=?', (rid,))
+                    return jsonify({'ok':True})
+                orig=row(db, f'SELECT * FROM {sqltable} WHERE {pk}=?', (rid,))
+                if not orig: raise UserError('Registro no encontrado.',404)
+                for key in ('id_viaje','id_itinerario','id_presupuesto'):
+                    if key in orig and key in p and str(p[key]) != str(orig[key]):
+                        raise UserError('No se puede cambiar el registro a otro viaje.')
+                upd={k:p[k] for k in allowed if k in p}
+                merged={**orig,**upd}
+                validate_item(db, table, merged, orig)
+                keys=list(upd.keys())
+                if keys: db.execute(f"UPDATE {sqltable} SET {','.join(x+'=?' for x in keys)} WHERE {pk}=?", [merged[x] for x in keys]+[rid])
+                return jsonify({'ok':True})
+
+    raise UserError('Función no encontrada.',404)
+
+
+if IS_RAILWAY and not DATABASE_URL:
+    raise RuntimeError('Agrega una base PostgreSQL y conecta su variable DATABASE_URL en Railway.')
+
+init_db()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT',8000)), debug=False)

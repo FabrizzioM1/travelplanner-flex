@@ -1,0 +1,13 @@
+digraph G {
+ graph [rankdir=LR,bgcolor="transparent",pad=0.25,nodesep=0.24,ranksep=0.4];
+ node [shape=box,style="rounded,filled",fontname="DejaVu Sans",fontsize=11,margin="0.17,0.14",color="#cadfe0",fillcolor="#f2f9f7",fontcolor="#163c50"];
+ edge [color="#0f9690",penwidth=1.5,arrowsize=0.7];
+ a [label="Actividad afectada\npor imprevisto",fillcolor="#17374e",fontcolor="white"];
+ b [label="Elegir motivo\nlluvia / cancelación / costo"];
+ c [label="Filtrar catálogo\npor ciudad y criterios"];
+ d [label="Mostrar fotos +\ncosto estimado"];
+ e [label="Usuario elige\nPlan B",fillcolor="#d7f4ea"];
+ f [label="Actualizar actividad\ny registrar escenario"];
+ g [label="Recalcular previsto\ny comprobar horario",fillcolor="#fff0d6"];
+ a->b->c->d->e->f->g;
+}
