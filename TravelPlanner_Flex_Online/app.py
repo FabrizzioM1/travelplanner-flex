@@ -1,5 +1,5 @@
 """TravelPlanner Flex Online.
-Python + Flask + PostgreSQL (Railway) / SQLite (local development).
+Python + Flask + PostgreSQL (Neon) / SQLite (local development).
 """
 from __future__ import annotations
 import argparse
@@ -31,9 +31,13 @@ ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / 'static'
 DB_PATH = Path(os.environ.get('TRAVELPLANNER_DB', str(ROOT / 'data' / 'travelplanner.sqlite3')))
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
-IS_RAILWAY = bool(os.environ.get('RAILWAY_PUBLIC_DOMAIN') or os.environ.get('RAILWAY_ENVIRONMENT_NAME'))
+IS_RENDER = bool(os.environ.get('RENDER') or os.environ.get('RENDER_SERVICE_ID'))
+IS_HOSTED = IS_RENDER or os.environ.get('TRAVELPLANNER_HOSTED') == '1'
 if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = 'postgresql://' + DATABASE_URL[len('postgres://'):]
+# Neon exige TLS; si la URL no incluye sslmode, se agrega explícitamente.
+if DATABASE_URL and 'sslmode=' not in DATABASE_URL:
+    DATABASE_URL += ('&' if '?' in DATABASE_URL else '?') + 'sslmode=require'
 DESTINOS = {
     'Oaxaca': (17.0654, -96.7237),
     'Veracruz': (19.1738, -96.1342),
@@ -288,7 +292,11 @@ def connect():
 def now(): return dt.datetime.now().isoformat(timespec="seconds")
 def _plain_record(record):
     return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in dict(record).items()}
-def rows(db,sql,params=()):return [_plain_record(x) for x in db.execute(sql,params)]
+def rows(db, sql, params=()):
+    # psycopg 3 devuelve un CursorProxy que expone fetchall(), pero no es iterable.
+    # SQLite y PostgreSQL ofrecen fetchall(), por lo que usamos la misma interfaz.
+    cursor = db.execute(sql, params)
+    return [_plain_record(item) for item in cursor.fetchall()]
 def row(db,sql,params=()):
     r=db.execute(sql,params).fetchone();return _plain_record(r) if r else None
 
@@ -499,14 +507,14 @@ def apply_planb(db,p):
 
 app = Flask(__name__, static_folder=None)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-if IS_RAILWAY and not os.environ.get('SECRET_KEY'):
-    raise RuntimeError('Configura SECRET_KEY en las variables de Railway antes de publicar.')
+if IS_HOSTED and not os.environ.get('SECRET_KEY'):
+    raise RuntimeError('Configura SECRET_KEY en las variables del servicio antes de publicar.')
 
 app.config.update(
     SECRET_KEY=os.environ.get('SECRET_KEY', 'local-only-change-this-secret-before-deploying'),
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=IS_RAILWAY,
+    SESSION_COOKIE_SECURE=IS_HOSTED,
     PERMANENT_SESSION_LIFETIME=dt.timedelta(days=14),
     MAX_CONTENT_LENGTH=200_000,
 )
@@ -785,8 +793,8 @@ def api_router(subpath):
     raise UserError('Función no encontrada.',404)
 
 
-if IS_RAILWAY and not DATABASE_URL:
-    raise RuntimeError('Agrega una base PostgreSQL y conecta su variable DATABASE_URL en Railway.')
+if IS_HOSTED and not DATABASE_URL:
+    raise RuntimeError('Configura DATABASE_URL con la cadena de conexión de Neon PostgreSQL.')
 
 init_db()
 
