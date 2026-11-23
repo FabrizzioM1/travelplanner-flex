@@ -1,7 +1,7 @@
 /* TravelPlanner Flex — interfaz sin dependencias externas. JS para la vista; Python para datos. */
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const state={tab:'inicio',trips:[],tripId:null,detail:null,catalog:[],destinations:[],filter:'Todos',city:'Veracruz',exploreDestination:null,exploreMode:'lugares',catalogSearch:'',transportOrigin:'',photoRequests:{},draft:null,pendingPlaceId:null,pendingRecommendation:null,authed:false,modal:null,voter:null,weather:null,csrf:null,gallery:null,experiences:[],experienceMode:'Pescar',experienceRegion:'Veracruz',experienceZone:'Todas',experienceType:'Todas',experienceLevel:'Todos',experiencePhotoIndex:0,experienceDetail:null,municipioEstado:'Veracruz',municipioNombre:'Catemaco',municipioActividad:'Naturaleza',municipioInteres:'Todas',municipioOrden:'puntaje',municipioResultados:[],municipioCargando:false,municipioCargado:false,municipioInfo:null,municipioExplicacion:null};
+const state={tab:'inicio',trips:[],tripId:null,detail:null,catalog:[],destinations:[],filter:'Todos',city:'Veracruz',exploreDestination:null,exploreMode:'lugares',catalogSearch:'',transportOrigin:'',photoRequests:{},draft:null,pendingPlaceId:null,pendingRecommendation:null,authed:false,modal:null,voter:null,weather:null,csrf:null,gallery:null,experiences:[],experienceMode:'Pescar',experienceRegion:'Veracruz',experienceZone:'Todas',experienceType:'Todas',experienceLevel:'Todos',experiencePhotoIndex:0,experienceDetail:null,municipioEstado:'Veracruz',municipioNombre:'Catemaco',municipioActividad:'Naturaleza',municipioInteres:'Todos',municipioOrden:'puntaje',municipioResultados:[],municipioCargando:false,municipioCargado:false,municipioInfo:null,municipioExplicacion:null,municipioNombres:[],municipioFiltroCerca:false,municipioCatalogoCargado:false};
 const money=n=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(Number(n)||0);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dateES=s=>{if(!s)return 'Sin fecha';const [y,m,d]=String(s).slice(0,10).split('-');return `${d}/${m}/${y}`};
@@ -99,7 +99,7 @@ function placeById(id){return state.catalog.find(l=>l.id_lugar===id)}
 function renderNav(){let sel=$('#trip-select');sel.innerHTML=state.trips.length?state.trips.map(t=>`<option value="${t.id_viaje}" ${t.id_viaje===state.tripId?'selected':''}>${esc(t.nombre)}</option>`).join(''):'<option value="">Sin viajes</option>';
  $$('[data-nav]').forEach(x=>x.classList.toggle('active',x.dataset.nav===state.tab))}
 function render(){renderNav();let content={inicio:home,explorar:explore,municipios:municipiosPage,experiencias:experiences,agenda:agenda,reservas:reservations,finanzas:finance,grupo:group,ajustes:settings}[state.tab]||home;$('#content').innerHTML=content();renderDock();hydratePlacePhotos()}
-function go(tab){if(tab==='explorar'&&!state.exploreDestination)state.exploreDestination=trip()?.destino||'Veracruz';state.tab=tab;state.filter='Todos';render();if(tab==='municipios'&&!state.municipioCargado)loadMunicipalRecommendations();window.scrollTo({top:0,behavior:'smooth'})}
+function go(tab){if(tab==='explorar'&&!state.exploreDestination)state.exploreDestination=trip()?.destino||'Veracruz';state.tab=tab;state.filter='Todos';render();if(tab==='municipios'&&!state.municipioCatalogoCargado)loadMunicipalList();window.scrollTo({top:0,behavior:'smooth'})}
 function header(eyebrow,title,sub,button=''){return `<div class="titlebar"><div><span class="eyebrow">${eyebrow}</span><h2>${title}</h2><p>${sub}</p></div>${button}</div>`}
 function empty(label='Primero crea un viaje',sub='Tu siguiente aventura empieza con un destino y unas fechas.'){
  return `<div class="empty"><div class="big">✈</div><h3>${label}</h3><p>${sub}</p><button class="btn primary" data-action="newtrip">+ Crear viaje</button></div>`}
@@ -218,44 +218,69 @@ function settings(){return header('INFORMACIÓN Y CONTROL','Configuración','Adm
 function renderDock(){let el=$('#dock'),d=state.draft,t=trip();if(!d&&['explorar','experiencias','municipios','ajustes'].includes(state.tab)){el.classList.add('hidden');el.innerHTML='';return}if(d){el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Tu viaje se está formando</div><div class="bar-data">${d.destino?`<span>📍 ${esc(d.destino)}</span>`:''}${d.fecha_inicio?`<span>📅 ${dateES(d.fecha_inicio)}</span>`:''}${d.presupuesto?`<span>💰 ${money(d.presupuesto)}</span>`:''}</div></div><div class="dock-right"><strong>Revisa y guarda</strong><button class="btn primary sm" data-action="submit-trip-draft">Guardar viaje →</button></div>`;return}
  if(!t){el.classList.add('hidden');return}let b=state.detail.presupuesto;el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Mi viaje: ${esc(t.destino)}</div><div class="bar-data"><span>📅 ${dateES(t.fecha_inicio)}</span><span>💰 Presupuesto ${money(b.presupuesto.monto_total)}</span><span>📊 Gastado ${money(b.gasto_real)}</span><span>🗓 ${state.detail.dias.reduce((acc,v)=>acc+v.actividades.length,0)} actividades</span></div></div><div class="dock-right"><strong style="color:${b.saldo<0?'#c65345':'#138278'}">Saldo ${money(b.saldo)}</strong><button class="btn primary sm" data-nav="agenda">Ver plan →</button></div>`}
 
-// TravelPlanner Flex 2.3 — recomendaciones por municipio, explicables y sin ranking inventado.
+// TravelPlanner Flex 2.4 — selector de 212 municipios, OSM en demanda y ranking transparente.
+async function loadMunicipalList(){
+ try{
+  const d=await api('/api/municipios-veracruz');
+  state.municipioNombres=d.municipios?.Veracruz||[];
+  state.municipioCatalogoCargado=true;
+  if(!state.municipioNombres.includes(state.municipioNombre))state.municipioNombre='Catemaco';
+  if(state.tab==='municipios')render();
+ }catch(err){fail(err)}
+}
 async function loadMunicipalRecommendations(){
- state.municipioCargando=true;render();
- const p=new URLSearchParams({estado:state.municipioEstado,municipio:state.municipioNombre,actividad:state.municipioActividad,interes:state.municipioInteres});
+ if(state.municipioCargando)return;
+ state.municipioCargando=true;
+ state.municipioCargado=false;
+ render();
+ const p=new URLSearchParams({estado:'Veracruz',municipio:state.municipioNombre,actividad:state.municipioActividad,interes:state.municipioInteres,cerca:state.municipioFiltroCerca?'1':'0'});
  try{
    const result=await api('/api/recomendaciones-municipio?'+p.toString());
-   state.municipioResultados=result.lugares||[];state.municipioInfo=result;state.municipioCargado=true;
+   state.municipioResultados=result.lugares||[];
+   state.municipioInfo=result;
+   state.municipioCargado=true;
+   // Permite reutilizar galería y botón Agregar sin cambiar la base del itinerario.
+   for(const r of state.municipioResultados){
+      if(!placeById(r.id_lugar))state.catalog.push({id_lugar:r.id_lugar,ciudad:'Veracruz',nombre:r.nombre,lat:r.lat,lon:r.lon,imagen:r.imagen||'/static/img/photo-placeholder.svg',fuente:r.fuente,credito:'Colaboradores de OpenStreetMap',licencia:'ODbL 1.0',categoria:r.categoria||r.actividad,descripcion:r.descripcion,costo_estimado:0,precio_estimado:0,duracion_min:90});
+   }
  }catch(err){state.municipioResultados=[];state.municipioInfo=null;fail(err)}
  finally{state.municipioCargando=false;if(state.tab==='municipios')render()}
 }
 function municipiosPage(){
- const states=state.destinations.length?state.destinations:['Veracruz'];
- const estado=state.municipioEstado, municipio=state.municipioNombre;
- const disponibilidad=state.municipioInfo?.municipios||{'Veracruz':['Catemaco']};
- const municipios=disponibilidad[estado]||[];
- const intereses=['Todas','Agua y lagunas','Selva y senderos','Fauna y observación'];
- const inputSelect=(id,label,opts,val,disabled=false)=>`<div class="field"><label for="${id}">${label}</label><select id="${id}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${esc(x)}" ${x===val?'selected':''}>${esc(x)}</option>`).join('')}</select></div>`;
+ const municipio=state.municipioNombre;
+ const inputSelect=(id,label,opts,val)=>`<div class="field"><label for="${id}">${label}</label><select id="${id}">${opts.map(x=>`<option value="${esc(x)}" ${x===val?'selected':''}>${esc(x)}</option>`).join('')}</select></div>`;
  const view=[...state.municipioResultados];
  if(state.municipioOrden==='nombre')view.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
- let cards=view.map((item,i)=>{
-  const place=placeById(item.id_lugar);
-  const photoHtml=place?placePhotoWrap(place):'<div class="municipal-photo-placeholder">🌿</div>';
+ const cards=view.map((item,i)=>{
   const expanded=state.municipioExplicacion===item.id_lugar;
-  return `<article class="card municipal-card"><div class="municipal-cover">${photoHtml}<span class="municipal-rank">${state.municipioOrden==='puntaje'?'#'+(i+1):'Catemaco'}</span></div>
-   <div class="municipal-body"><div class="row between"><span class="pill">🌿 Naturaleza</span><span class="municipal-score" title="Puntaje de coincidencia, NO calificación turística">${item.puntaje}/100 coincidencia</span></div>
-   <h3>${esc(item.nombre)}</h3><div class="municipal-tags">${(item.subactividades||[]).map(x=>`<span>${esc(x)}</span>`).join('')}</div>
-   <p>${esc(item.descripcion)}</p><div class="municipal-why"><strong>¿Por qué lo recomendamos?</strong><span>${esc(item.motivo)}</span></div>
-   <button class="municipal-explain-toggle" data-action="municipio-explicacion" data-id="${esc(item.id_lugar)}" aria-expanded="${expanded}">${expanded?'Ocultar':'Ver'} cómo se calculó el puntaje ${expanded?'−':'+'}</button>
-   ${expanded?`<div class="municipal-breakdown">${item.desglose.map(x=>`<div><span>${esc(x.criterio)}</span><strong>${x.puntos}/${x.maximo}</strong></div>`).join('')}<small>Este puntaje expresa relevancia para la búsqueda. No representa satisfacción, seguridad, distancia por carretera ni número de visitantes.</small></div>`:''}
-   <p class="municipal-practical">${esc(item.acceso)}</p><div class="municipal-actions"><button class="btn sm primary" data-action="add-place" data-id="${esc(item.id_lugar)}">+ Agregar al viaje</button><button class="btn sm outline" data-action="info-place" data-id="${esc(item.id_lugar)}">📷 Ver fotos</button><a class="btn sm soft" href="${esc(mapsForPlace({...item,ciudad:'Catemaco, Veracruz'}))}" target="_blank" rel="noopener noreferrer">Ver mapa ↗</a></div>
-   <div class="municipal-source"><a href="${esc(item.fuente)}" target="_blank" rel="noopener noreferrer">Consultar fuente ↗</a><span>${esc(item.tipo_fuente)}</span></div></div></article>`;
+  const photo=placeById(item.id_lugar);
+  const photoHtml=photo&&photo.imagen&&!(photo.imagen.includes('photo-placeholder.svg'))?placePhotoWrap(photo):`<div class="municipal-photo-placeholder" aria-label="Lugar sin fotografía reutilizable">📍<small>Foto por documentar</small></div>`;
+  const source=item.fuente && item.fuente.startsWith('https://') ? item.fuente : 'https://www.openstreetmap.org/copyright';
+  const placeLabel=item.cerca?'Alrededores (municipio por comprobar)':municipio+', Veracruz';
+  const mapUrl=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((item.lat!=null&&item.lon!=null)?`${item.lat},${item.lon}`:item.nombre+', '+municipio+', Veracruz')}`;
+  return `<article class="card municipal-card"><div class="municipal-cover">${photoHtml}<span class="municipal-rank">${state.municipioOrden==='puntaje'?'#'+(i+1):'Veracruz'}</span></div>
+  <div class="municipal-body"><div class="row between"><span class="pill">${esc(item.categoria||'Naturaleza')}</span><span class="municipal-score" title="Coincidencia, NO valoración">${item.puntaje}/100 coincidencia</span></div>
+  <h3>${esc(item.nombre)}</h3><div class="municipal-tags"><span>${esc(placeLabel)}</span>${(item.subactividades||[]).slice(0,3).map(t=>`<span>${esc(t)}</span>`).join('')}</div>
+  <p>${esc(item.descripcion||'Lugar que puedes investigar antes de viajar.')}</p>
+  <div class="municipal-why"><strong>¿Por qué aparece?</strong><span>${esc(item.motivo||'Se relaciona con la categoría y la ubicación seleccionadas.')}</span></div>
+  <button class="municipal-explain-toggle" data-action="municipio-explicacion" data-id="${esc(item.id_lugar)}" aria-expanded="${expanded}">${expanded?'Ocultar':'Ver'} criterios del ranking ${expanded?'−':'+'}</button>
+  ${expanded?`<div class="municipal-breakdown">${(item.desglose||[]).map(x=>`<div><span>${esc(x.criterio)}</span><strong>${x.puntos}/${x.maximo}</strong></div>`).join('')}<small>0–100 significa afinidad con la búsqueda. No es calificación, visita, precio ni popularidad. Fuente: ${esc(item.tipo_fuente||'Datos públicos')}.</small></div>`:''}
+  <p class="municipal-practical">${esc(item.acceso||'Comprueba horarios y reglas de acceso antes de visitar.')}</p>
+  <div class="municipal-actions"><button class="btn sm primary" data-action="add-place" data-id="${esc(item.id_lugar)}">+ Agregar al viaje</button><button class="btn sm outline" data-action="info-place" data-id="${esc(item.id_lugar)}">Fotos / ficha</button><a class="btn sm soft" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">Mapa ↗</a></div>
+  <div class="municipal-source"><a href="${esc(source)}" target="_blank" rel="noopener noreferrer">Fuente original ↗</a><span>${esc(item.tipo_fuente||'OSM')}</span></div></div></article>`;
  }).join('');
- return header('BUSCA POR MUNICIPIO','Un viaje a tu medida','Catemaco, Veracruz: lugares de Naturaleza ordenados por afinidad y respaldo documental. No por supuestos visitantes.')+
- `<section class="municipal-banner"><div><span class="eyebrow">PILOTO · CATEMACO</span><h3>No solo tres por estado: descubre sitios del municipio.</h3><p>El ranking te dice por qué aparece cada lugar y qué información hace falta verificar.</p></div><span class="municipal-banner-symbol">🌿</span></section>
- <section class="municipal-filters card card-pad">${inputSelect('municipio-estado','Estado',states,estado)}${inputSelect('municipio-nombre','Municipio',municipios.length?municipios:['Sin municipios documentados'],municipios.length?municipio:'Sin municipios documentados',!municipios.length)}${inputSelect('municipio-actividad','Actividad',['Naturaleza'],state.municipioActividad,estado!=='Veracruz')}${inputSelect('municipio-interes','Tipo de experiencia',intereses,state.municipioInteres)}${inputSelect('municipio-orden','Ordenar por',['Mejor coincidencia','Nombre (A–Z)'],state.municipioOrden==='puntaje'?'Mejor coincidencia':'Nombre (A–Z)')}<button class="btn primary" data-action="municipio-actualizar">Buscar lugares →</button></section>
- <section class="section"><div class="municipal-results-title"><div><h3>${state.municipioCargando?'Buscando recomendaciones…':view.length+' opciones documentadas'}</h3><p>${esc(estado)} · ${esc(municipio||'Sin municipio')} · ${esc(state.municipioActividad)}. Cada sitio puede tener acceso o tarifa por confirmar.</p></div><span class="pill">Puntaje explicable /100</span></div>
- <div class="municipal-explanation"><strong>Cómo ordenamos:</strong> Actividad 40 · Municipio 25 · Interés 15 · Fuente 15 · Ficha 5. No usamos una cantidad inventada de visitantes ni opiniones sin fuente. <strong>Salto de Eyipantla</strong> se deja fuera del listado municipal porque pertenece a San Andrés Tuxtla.</div>
- ${state.municipioCargando?'<p>Consultando fichas municipales…</p>':view.length?`<div class="municipal-grid">${cards}</div>`:'<div class="empty"><h3>Sin recomendaciones verificadas para este filtro</h3><p>La cobertura municipal se ampliará por etapas. No mostramos lugares de otros municipios fingiendo que pertenecen al seleccionado.</p><button class="btn primary" data-action="municipio-volver">Ver piloto de Catemaco</button></div>'}
+ const info=state.municipioInfo||{};
+ const status=info.estado_consulta||'';
+ const statusText = {'cache':'Datos del catálogo guardados.','openstreetmap':'Consulta actualizada desde OpenStreetMap.','offline':'Modo sin consulta externa: solo fichas verificadas guardadas.','limitado':'El proveedor limitó temporalmente consultas; intenta después.','ocupado':'Hay otra consulta en curso; inténtalo de nuevo.','pausa':'Espera unos segundos antes de consultar otro municipio.','no-disponible':'OpenStreetMap no respondió; mostrando los datos que tenemos.','':'Pulsa Buscar para consultar lugares documentados.'}[status]||'Consulta disponible';
+ const warning = !state.municipioCargado?'Selecciona municipio y actividad, después pulsa Buscar. No se descargan datos de los 212 municipios a la vez.':info.limite_municipal_encontrado?'Los puntos OSM provienen del límite municipal cartografiado. Verifica acceso y situación real.':"No pudimos verificar el límite municipal en OSM; no hemos añadido lugares de otro municipio como si fueran de éste.";
+ return header('DESCUBRE MÁS MUNICIPIOS','Encuentra experiencias cerca de ti','Todos los municipios de Veracruz disponibles para seleccionar. Lugares consultados bajo demanda, con fuentes y puntajes explicables.')+
+ `<section class="municipal-banner"><div><span class="eyebrow">VERACRUZ · 212 MUNICIPIOS</span><h3>De Catemaco a cualquier municipio de Veracruz.</h3><p>Recomendaciones según actividad, interés y fuente. No por supuestas reseñas o visitantes.</p></div><span class="municipal-banner-symbol">🌿</span></section>
+ <section class="municipal-filters card card-pad">${inputSelect('municipio-estado','Estado',['Veracruz'],'Veracruz')}${inputSelect('municipio-nombre','Municipio',state.municipioNombres.length?state.municipioNombres:['Catemaco'],municipio)}${inputSelect('municipio-actividad','Actividad',['Naturaleza','Cultura','Gastronomía','Todas'],state.municipioActividad)}${inputSelect('municipio-interes','Me interesa',['Todos','Agua y lagunas','Selva y senderos','Fauna','Historia','Museos','Comida local','Parques'],state.municipioInteres==='Todas'?'Todos':state.municipioInteres)}${inputSelect('municipio-orden','Ordenar por',['Mejor coincidencia','Nombre (A–Z)'],state.municipioOrden==='puntaje'?'Mejor coincidencia':'Nombre (A–Z)')}
+ <label class="municipal-nearby"><input type="checkbox" id="municipio-cerca" ${state.municipioFiltroCerca?'checked':''}> Mostrar también lugares de los alrededores (hasta 15 km aproximadamente)</label>
+ <button class="btn primary" data-action="municipio-actualizar" ${state.municipioCargando?'disabled':''}>${state.municipioCargando?'Consultando…':'Buscar lugares →'}</button></section>
+ <section class="section"><div class="municipal-results-title"><div><h3>${state.municipioCargando?'Buscando…':state.municipioCargado?view.length+' recomendaciones encontradas':'Busca lugares de tu municipio'}</h3><p>${esc(municipio)}, Veracruz · ${esc(state.municipioActividad)} · ${esc(statusText)}</p></div><span class="pill">Ranking transparente /100</span></div>
+ <div class="municipal-explanation"><strong>Cómo ordenamos:</strong> Actividad 40 · Municipio 25 · Interés 15 · Fuente 15 · Ficha 5. ${esc(warning)}<div><small>© colaboradores de OpenStreetMap · ODbL. Datos colaborativos, no se garantiza exhaustividad ni vigencia. <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">Atribución</a>.</small></div></div>
+ ${state.municipioCargando?'<p>Consultando datos municipales. Si es la primera búsqueda puede tardar algunos segundos…</p>':view.length?`<div class="municipal-grid">${cards}</div>`:`<div class="empty"><h3>${state.municipioCargado?'No hay resultados verificados para esta búsqueda':'¿Qué te gustaría visitar?'}</h3><p>${state.municipioCargado?'Prueba otra categoría o consulta el mapa. Que no haya resultados no significa que no existan lugares en ese municipio.':'Elige un municipio y actividad, y pulsa Buscar. También puedes explorar el catálogo anterior.'}</p><a class="btn soft" href="https://www.openstreetmap.org/search?query=${encodeURIComponent(municipio+', Veracruz, México')}" target="_blank" rel="noopener noreferrer">Buscar en OpenStreetMap ↗</a></div>`}
  </section>`;
 }
 
@@ -393,7 +418,7 @@ async function chooseAction(action,el){let id=el.dataset.id,tab=el.dataset.nav;t
    updateExperienceGallery();return;
  }
  if(action==='municipio-actualizar'){await loadMunicipalRecommendations();return}
- if(action==='municipio-volver'){state.municipioEstado='Veracruz';state.municipioNombre='Catemaco';state.municipioActividad='Naturaleza';state.municipioInteres='Todas';state.municipioCargado=false;await loadMunicipalRecommendations();return}
+ if(action==='municipio-volver'){state.municipioEstado='Veracruz';state.municipioNombre='Catemaco';state.municipioActividad='Naturaleza';state.municipioInteres='Todos';state.municipioCargado=false;await loadMunicipalRecommendations();return}
  if(action==='municipio-explicacion'){state.municipioExplicacion=state.municipioExplicacion===id?null:id;render();return}
  if(action==='newtrip'){openForm('viaje');return}
  if(action==='choose-trip'){await loadTrips(Number(id));go('inicio');return}
@@ -491,11 +516,12 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-action],[d
 document.addEventListener('change',async e=>{
  if(e.target.id==='trip-select'){try{await loadTrips(Number(e.target.value));render()}catch(err){fail(err)}}
  if(e.target.id==='city-filter'){state.exploreDestination=e.target.value;state.city=e.target.value;state.filter='Todos';state.catalogSearch='';render();}
- if(e.target.id==='municipio-estado'){state.municipioEstado=e.target.value;state.municipioNombre=e.target.value==='Veracruz'?'Catemaco':'';state.municipioCargado=false;await loadMunicipalRecommendations()}
- if(e.target.id==='municipio-nombre'){state.municipioNombre=e.target.value;state.municipioCargado=false;await loadMunicipalRecommendations()}
- if(e.target.id==='municipio-actividad'){state.municipioActividad=e.target.value;state.municipioCargado=false;await loadMunicipalRecommendations()}
- if(e.target.id==='municipio-interes'){state.municipioInteres=e.target.value;state.municipioCargado=false;await loadMunicipalRecommendations()}
+ if(e.target.id==='municipio-estado'){state.municipioEstado=e.target.value;state.municipioCargado=false;state.municipioResultados=[];render()}
+ if(e.target.id==='municipio-nombre'){state.municipioNombre=e.target.value;state.municipioCargado=false;state.municipioResultados=[];render()}
+ if(e.target.id==='municipio-actividad'){state.municipioActividad=e.target.value;state.municipioCargado=false;state.municipioResultados=[];render()}
+ if(e.target.id==='municipio-interes'){state.municipioInteres=e.target.value;state.municipioCargado=false;state.municipioResultados=[];render()}
  if(e.target.id==='municipio-orden'){state.municipioOrden=e.target.value==='Nombre (A–Z)'?'nombre':'puntaje';render()}
+ if(e.target.id==='municipio-cerca'){state.municipioFiltroCerca=e.target.checked;state.municipioCargado=false;state.municipioResultados=[];render()}
 
  if(e.target.id==='experience-zone'){state.experienceZone=e.target.value;render()}
  if(e.target.id==='experience-type'){state.experienceType=e.target.value;render()}
