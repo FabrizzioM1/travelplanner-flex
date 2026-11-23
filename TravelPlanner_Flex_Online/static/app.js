@@ -1,10 +1,13 @@
 /* TravelPlanner Flex — interfaz sin dependencias externas. JS para la vista; Python para datos. */
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const state={tab:'inicio',trips:[],tripId:null,detail:null,catalog:[],destinations:[],filter:'Todos',city:'Veracruz',exploreDestination:null,exploreMode:'lugares',catalogSearch:'',transportOrigin:'',photoRequests:{},draft:null,pendingPlaceId:null,pendingRecommendation:null,authed:false,modal:null,voter:null,weather:null,csrf:null};
+const state={tab:'inicio',trips:[],tripId:null,detail:null,catalog:[],destinations:[],filter:'Todos',city:'Veracruz',exploreDestination:null,exploreMode:'lugares',catalogSearch:'',transportOrigin:'',photoRequests:{},draft:null,pendingPlaceId:null,pendingRecommendation:null,authed:false,modal:null,voter:null,weather:null,csrf:null,gallery:null};
 const money=n=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(Number(n)||0);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dateES=s=>{if(!s)return 'Sin fecha';const [y,m,d]=String(s).slice(0,10).split('-');return `${d}/${m}/${y}`};
+const classifyPlace=p=>p?.categoria==='Gastronomía'?'Gastronomía':(['Naturaleza','Paseo','Aire libre'].includes(p?.categoria)?'Aire libre':'Cultura');
+const mapsForPlace=p=>'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((p?.nombre||'')+', '+(p?.ciudad||'')+', México');
+const restaurantsNear=p=>'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent('restaurantes cerca de '+(p?.nombre||'')+', '+(p?.ciudad||'')+', México');
 const img=l=>l?.imagen||'/static/img/photo-placeholder.svg';
 const photo=(src,cl='card-img',alt='Fotografía del lugar')=>`<img loading="lazy" class="${cl}" src="${esc(src)}" alt="${esc(alt)}" onerror="this.onerror=null;this.src='/static/img/photo-placeholder.svg'">`;
 function placePhoto(place,cl='card-img'){const src=img(place);const pending=(!src||src==='/static/img/photo-placeholder.svg'||src.endsWith('photo-placeholder.svg'))&&!place?.foto_intentada;return `<img loading="lazy" class="${cl}" src="${esc(src)}" alt="Fotografía de ${esc(place?.nombre||'destino')}" ${pending?`data-place-photo="${esc(place?.id_lugar||'')}"`:''} onerror="this.onerror=null;this.src='/static/img/photo-placeholder.svg'">`}
@@ -38,16 +41,16 @@ function home(){let t=trip(),b=state.detail?.presupuesto;if(!t)return header('OR
  <section class="section callout">✦ <strong>TravelPlanner Flex</strong> propone alternativas y detecta horarios encimados. Las fotografías del catálogo son imágenes reales seleccionadas de Wikimedia Commons; consulta el crédito y la licencia en los detalles de cada lugar. Los costos son estimaciones de demostración, no tarifas oficiales.</section>`}
 function explore(){
  const destination=state.exploreDestination||'Veracruz';
- const allPlaces=state.catalog.filter(p=>p.ciudad===destination);
+ const allPlaces=[...new Map(state.catalog.filter(p=>p.ciudad===destination).map(p=>[p.nombre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es-MX').trim(),p]).reverse()).values()].reverse();
  const query=state.catalogSearch.trim().toLocaleLowerCase('es-MX');
- const filtered=allPlaces.filter(p=>(state.filter==='Todos'||p.categoria===state.filter)&&(!query||`${p.nombre} ${p.descripcion} ${p.categoria}`.toLocaleLowerCase('es-MX').includes(query)));
- const cats=['Todos',...new Set(allPlaces.map(x=>x.categoria))];
+ const filtered=allPlaces.filter(p=>(state.filter==='Todos'||classifyPlace(p)===state.filter)&&(!query||`${p.nombre} ${p.descripcion} ${p.categoria}`.toLocaleLowerCase('es-MX').includes(query)));
+ const cats=['Todos','Cultura','Aire libre','Gastronomía'];
  const tabs=[['lugares','Lugares'],['hospedaje','Hoteles'],['transporte','Transporte']];
  const tabHtml=`<div class="explore-tabs">${tabs.map(([key,label])=>`<button class="${state.exploreMode===key?'active':''}" data-action="explore-mode" data-mode="${key}">${label}</button>`).join('')}</div>`;
  const selector=`<div class="destination-search"><div class="field"><label for="city-filter">Destino o entidad</label><select id="city-filter">${state.destinations.map(c=>`<option value="${esc(c)}" ${destination===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="destination-note"><strong>${allPlaces.length} lugares destacados</strong><span>Catálogo nacional · México</span></div></div>`;
  let panel='';
  if(state.exploreMode==='lugares'){
-   panel=`<div class="filters"><input id="catalog-search" class="catalog-search" type="search" placeholder="Buscar lugar, actividad o categoría…" value="${esc(state.catalogSearch)}"><span class="tiny muted">${filtered.length} resultados</span></div><div class="filter-bar filters">${cats.map(c=>`<button data-action="filter" data-filter="${esc(c)}" class="${state.filter===c?'on':''}">${esc(c)}</button>`).join('')}</div><div class="grid grid-3">${filtered.map(l=>`<article class="card place-card">${placePhoto(l)}<div class="card-footer"><div class="row between">${tag(l.categoria)}${tag(l.interior?'Bajo techo':'Exterior',l.interior?'':'ochre')}</div><div class="meta"><h4>${esc(l.nombre)}</h4><p>${esc(l.descripcion)}</p><span class="tiny muted">${esc(l.ciudad)} · Foto: ${esc(l.credito||'Crédito y licencia al consultar la imagen')}</span></div><div class="row between"><span class="cost">${Number(l.precio_estimado)>0?money(l.precio_estimado):'Consultar tarifa'}</span><span class="tiny muted">~ ${l.duracion_min} min</span></div><div class="btn-group"><button class="btn sm primary" data-action="add-place" data-id="${l.id_lugar}">+ Mi itinerario</button><button class="btn sm outline" data-action="info-place" data-id="${l.id_lugar}">Detalles</button></div></div></article>`).join('')||'<div class="empty">No encontramos lugares con ese filtro. Prueba otra búsqueda.</div>'}</div><p class="illustration-label">Los lugares son una selección inicial representativa, no un inventario exhaustivo de todos los atractivos de México. Los costos se muestran solo cuando existe un dato cargado; confirma tarifas y horarios con cada recinto.</p>`;
+   panel=`<div class="filters"><input id="catalog-search" class="catalog-search" type="search" placeholder="Buscar lugar, actividad o categoría…" value="${esc(state.catalogSearch)}"><span class="tiny muted">${filtered.length} resultados</span></div><div class="filter-bar filters" role="group" aria-label="Filtrar lugares">${cats.map(c=>`<button data-action="filter" data-filter="${esc(c)}" class="${state.filter===c?'on':''}" aria-pressed="${state.filter===c}">${esc(c)} <span class="filter-count">${c==='Todos'?allPlaces.length:allPlaces.filter(p=>classifyPlace(p)===c).length}</span></button>`).join('')}</div><p class="filter-help">Elige un filtro. Gastronomía reúne mercados y zonas para comer, no restaurantes con horarios o precios verificados. Pulsa “Ver fotos y detalles” para deslizar la galería.</p><div class="grid grid-3">${filtered.map(l=>`<article class="card place-card">${placePhoto(l)}<div class="card-footer"><div class="row between">${tag(classifyPlace(l))}${tag(l.interior?'Bajo techo':'Exterior',l.interior?'':'ochre')}</div><div class="meta"><h4>${esc(l.nombre)}</h4><p>${esc(l.descripcion)}</p><span class="tiny muted">${esc(l.ciudad)} · Foto: ${esc(l.credito||'Crédito y licencia al consultar la imagen')}</span></div><div class="row between"><span class="cost">${Number(l.precio_estimado)>0?money(l.precio_estimado):'Consultar tarifa'}</span><span class="tiny muted">~ ${l.duracion_min} min</span></div><div class="btn-group"><button class="btn sm primary" data-action="add-place" data-id="${l.id_lugar}">+ Mi itinerario</button><button class="btn sm outline" data-action="info-place" data-id="${l.id_lugar}">📷 Ver fotos y detalles</button>${classifyPlace(l)==='Gastronomía'?`<a class="btn sm soft" href="${restaurantsNear(l)}" target="_blank" rel="noopener noreferrer">🍽 Dónde comer ↗</a>`:''}</div></div></article>`).join('')||'<div class="empty">No encontramos lugares con ese filtro. Prueba otra búsqueda.</div>'}</div><p class="illustration-label">Los lugares son una selección inicial representativa, no un inventario exhaustivo de todos los atractivos de México. Los costos se muestran solo cuando existe un dato cargado; confirma tarifas y horarios con cada recinto.</p>`;
  }else if(state.exploreMode==='hospedaje'){
    const t=trip();const dates=t&&t.destino===destination?`&checkin=${encodeURIComponent(t.fecha_inicio)}&checkout=${encodeURIComponent(t.fecha_fin)}&group_adults=${Math.max(1,Number(t.num_viajeros)||1)}`:'';
    const q=`${destination}, México`;const bookingFor=term=>`https://www.booking.com/searchresults.es.html?ss=${encodeURIComponent(term+' en '+q)}${dates}`;const mapsFor=term=>`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(term+' en '+q)}`;const google=`https://www.google.com/travel/search?q=${encodeURIComponent('hoteles en '+q)}`;const airbnb=`https://www.airbnb.mx/s/${encodeURIComponent(q)}/homes`;
@@ -80,6 +83,33 @@ function settings(){return header('INFORMACIÓN Y CONTROL','Configuración','Adm
  `<section class="section"><div class="grid grid-2"><div class="card card-pad"><h3>Exportar mis datos</h3><p class="tagline">Descarga viajes, reservaciones, itinerarios, presupuestos, gastos y preferencias en formato JSON.</p><br><button class="btn primary" data-action="export">↓ Descargar respaldo</button></div><div class="card card-pad"><h3>Tu cuenta</h3><p class="tagline">Tus viajes se guardan en la base de datos de tu cuenta y se comparten entre tus dispositivos al iniciar sesión.</p><br><button class="btn outline" data-action="logout">Cerrar sesión</button></div></div></section><section class="section callout orange"><strong>Alcance real:</strong> TravelPlanner no vende boletos ni confirma reservaciones. Los precios y tiempos son estimaciones; verifica horarios, tarifas y disponibilidad con los recintos. Plan B sugiere alternativas del catálogo y requiere que confirmes el cambio.</section><section class="section"><h3>Qué incluye la aplicación</h3><div class="special-flow"><span>Cuenta por usuario</span><span>Base de datos compartida</span><span>32 entidades · lugares destacados</span><span>Créditos y licencias</span><span>Detección de horarios</span><span>Plan B</span><span>Vista móvil y PC</span><span>Exportación JSON</span></div></section>`}
 function renderDock(){let el=$('#dock'),d=state.draft,t=trip();if(!d&&['explorar','ajustes'].includes(state.tab)){el.classList.add('hidden');el.innerHTML='';return}if(d){el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Tu viaje se está formando</div><div class="bar-data">${d.destino?`<span>📍 ${esc(d.destino)}</span>`:''}${d.fecha_inicio?`<span>📅 ${dateES(d.fecha_inicio)}</span>`:''}${d.presupuesto?`<span>💰 ${money(d.presupuesto)}</span>`:''}</div></div><div class="dock-right"><strong>Revisa y guarda</strong><button class="btn primary sm" data-action="submit-trip-draft">Guardar viaje →</button></div>`;return}
  if(!t){el.classList.add('hidden');return}let b=state.detail.presupuesto;el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Mi viaje: ${esc(t.destino)}</div><div class="bar-data"><span>📅 ${dateES(t.fecha_inicio)}</span><span>💰 Presupuesto ${money(b.presupuesto.monto_total)}</span><span>📊 Gastado ${money(b.gasto_real)}</span><span>🗓 ${state.detail.dias.reduce((acc,v)=>acc+v.actividades.length,0)} actividades</span></div></div><div class="dock-right"><strong style="color:${b.saldo<0?'#c65345':'#138278'}">Saldo ${money(b.saldo)}</strong><button class="btn primary sm" data-nav="agenda">Ver plan →</button></div>`}
+function galleryBody(){
+ const g=state.gallery; if(!g)return '';
+ const photos=g.fotos||[],index=Math.min(g.index||0,Math.max(0,photos.length-1)),pic=photos[index];
+ const frame=pic?`<img src="${esc(pic.imagen)}" alt="Fotografía ${index+1} de ${esc(g.place.nombre)}" onerror="this.onerror=null;this.src='/static/img/photo-placeholder.svg'">`:
+   '<div class="gallery-empty">Aún no hay una fotografía verificable disponible.</div>';
+ const counter=photos.length?`${index+1} / ${photos.length}`:'Sin fotografías verificadas';
+ const dots=photos.map((x,i)=>`<button class="gallery-dot ${i===index?'active':''}" aria-label="Ver fotografía ${i+1}" aria-pressed="${i===index}" data-action="gallery-dot" data-index="${i}"></button>`).join('');
+ const credit=pic?`<span>Foto: ${esc(pic.credito||'Consultar autor')} · ${esc(pic.licencia||'Consultar licencia')}</span><a href="${esc(pic.fuente||'#')}" target="_blank" rel="noopener noreferrer">Fuente y licencia ↗</a>`:'<span>La galería solo muestra fotografías con fuente verificable.</span>';
+ return `<div class="gallery-carousel" data-gallery="${esc(g.place.id_lugar)}"><div class="gallery-frame">${frame}
+  ${photos.length>1?`<button class="gallery-arrow prev" data-action="gallery-prev" aria-label="Fotografía anterior">‹</button><button class="gallery-arrow next" data-action="gallery-next" aria-label="Siguiente fotografía">›</button>`:''}
+  <span class="gallery-counter">${counter}</span></div><div class="gallery-dots">${dots}</div><div class="gallery-credit">${credit}</div></div>
+  ${g.loading?'<p class="gallery-status" role="status">Buscando más fotografías en Wikimedia Commons…</p>':g.faltantes>0?`<p class="gallery-status">Encontramos ${photos.length} de 3 fotografías verificables. No rellenamos las faltantes con fotos de otros sitios. <a target="_blank" rel="noopener noreferrer" href="https://commons.wikimedia.org/w/index.php?search=${encodeURIComponent(g.place.nombre+' '+g.place.ciudad)}&title=Special%3AMediaSearch&type=image">Buscar fotos del lugar en Wikimedia ↗</a></p>`:'<p class="gallery-status">Desliza a los lados o utiliza las flechas para ver las fotografías.</p>'}`;
+}
+function renderGallery(){const slot=$('#gallery-slot');if(slot&&state.gallery)slot.innerHTML=galleryBody()}
+async function openGallery(place){
+ state.gallery={place,fotos:[],index:0,loading:true,faltantes:3};
+ const gps=Number.isFinite(Number(place.lat))&&Number.isFinite(Number(place.lon))&&place.lat!==null;
+ showModal(esc(place.nombre),`<div id="gallery-slot">${galleryBody()}</div><p class="body-copy">${esc(place.descripcion)}</p>
+ <p class="gallery-place-note">${esc(place.ciudad)} · ${esc(classifyPlace(place))}. Precios y disponibilidad sujetos a consulta.</p>
+ <div class="btn-group"><button class="btn primary" data-action="add-place" data-id="${esc(place.id_lugar)}">+ Agregar al itinerario</button><a class="btn outline" href="${mapsForPlace(place)}" target="_blank" rel="noopener noreferrer">Ver ubicación en Maps ↗</a>${classifyPlace(place)==='Gastronomía'?`<a class="btn soft" href="${restaurantsNear(place)}" target="_blank" rel="noopener noreferrer">🍽 Buscar dónde comer ↗</a>`:''}</div>`,true);
+ try{
+   const result=await api('/api/catalogo/galeria/'+encodeURIComponent(place.id_lugar));
+   if(state.gallery?.place.id_lugar!==place.id_lugar)return;
+   state.gallery.fotos=result.fotos||[];state.gallery.faltantes=result.faltantes??Math.max(0,3-state.gallery.fotos.length);
+ }catch(e){if(state.gallery?.place.id_lugar!==place.id_lugar)return;state.gallery.fotos=[];state.gallery.faltantes=3;toast('No se pudo consultar la galería: '+e.message,true)}
+ finally{if(state.gallery?.place.id_lugar===place.id_lugar){state.gallery.loading=false;renderGallery()}}
+}
 function showModal(title,body,wide=false){$('#modal-root').innerHTML=`<div class="modal-layer"><div class="modal ${wide?'wide':''}" role="dialog" aria-modal="true"><div class="modal-head"><h2>${title}</h2><button class="xbutton" data-action="close" aria-label="Cerrar">×</button></div>${body}</div></div>`;hydratePlacePhotos()}
 function closeModal(){state.draft=null;state.pendingPlaceId=null;state.pendingRecommendation=null;$('#modal-root').innerHTML='';renderDock()}
 function input(name,label,type='text',val='',required=false,extra=''){
@@ -185,6 +215,14 @@ async function chooseAction(action,el){let id=el.dataset.id,tab=el.dataset.nav;t
  if(action==='filter'){state.filter=el.dataset.filter;render();return}
  if(action==='explore-mode'){state.exploreMode=el.dataset.mode||'lugares';render();return}
  if(action==='refresh-transport'){state.transportOrigin=$('#transport-origin')?.value.trim()||'';render();toast('Ruta actualizada.');return}
+ if(action?.startsWith('gallery-') && state.gallery){
+   const photos=state.gallery.fotos||[];
+   if(!photos.length)return;
+   if(action==='gallery-prev')state.gallery.index=(state.gallery.index-1+photos.length)%photos.length;
+   if(action==='gallery-next')state.gallery.index=(state.gallery.index+1)%photos.length;
+   if(action==='gallery-dot')state.gallery.index=Math.max(0,Math.min(photos.length-1,Number(el.dataset.index)||0));
+   renderGallery();return;
+ }
  if(action==='add-place'){
    let l=placeById(id);if(!l){toast('Lugar no encontrado en el catálogo.',true);return}
    if(!trip()||l.ciudad!==trip().destino){state.pendingPlaceId=id;openForm('viaje',null,{destino:l.ciudad});return}
@@ -201,7 +239,7 @@ async function chooseAction(action,el){let id=el.dataset.id,tab=el.dataset.nav;t
    if(!trip()||trip().destino!==state.exploreDestination){state.pendingRecommendation={kind:'transporte',extras};openForm('viaje',null,{destino:state.exploreDestination});return}
    openForm('transporte',null,extras);return
  }
- if(action==='info-place'){let l=placeById(id);showModal(esc(l.nombre),`${placePhoto(l,'card-img')}<p class="illustration-label">Fotografía: ${esc(l.credito||'Autor indicado en la fuente')} · ${esc(l.licencia||'Consulta licencia')} · <a href="${esc(l.fuente||'#')}" target="_blank" rel="noopener">Ver fuente y licencia ↗</a></p><p class="body-copy">${esc(l.descripcion)}</p><div class="grid grid-2"><div class="box-soft"><span class="tiny muted">Costo orientativo (no oficial)</span><h3>${Number(l.precio_estimado)>0?money(l.precio_estimado):'Consultar tarifa'}</h3></div><div class="box-soft"><span class="tiny muted">Tiempo estimado de visita</span><h3>${l.duracion_min} minutos</h3></div></div><br><div class="btn-group"><button class="btn primary" data-action="add-place" data-id="${l.id_lugar}">+ Agregar al itinerario</button><button class="btn outline" data-action="close">Cerrar</button></div>`);return}
+ if(action==='info-place'){let l=placeById(id);if(l)await openGallery(l);return}
  if(action==='add-day'){openForm('itinerario');return}
  if(action==='edit-day'){openForm('itinerario',Number(id));return}
  if(action==='add-activity'){openForm('actividad',null,{id_itinerario:Number(id)});return}
@@ -289,5 +327,8 @@ document.addEventListener('submit',async e=>{
 $('#show-register').addEventListener('click',()=>{$('#login-form').classList.add('hidden');$('#register-form').classList.remove('hidden')});
 $('#show-login').addEventListener('click',()=>{$('#register-form').classList.add('hidden');$('#login-form').classList.remove('hidden')});
 $('#account-btn').addEventListener('click',()=>chooseAction('logout',document.createElement('button')));
+let galleryTouchX=null;
+document.addEventListener('touchstart',e=>{if(e.target.closest('.gallery-frame'))galleryTouchX=e.changedTouches[0]?.screenX??null},{passive:true});
+document.addEventListener('touchend',e=>{if(galleryTouchX===null||!state.gallery)return;const dx=(e.changedTouches[0]?.screenX??galleryTouchX)-galleryTouchX;galleryTouchX=null;if(Math.abs(dx)>45){const c=state.gallery.fotos?.length||0;if(c>1){state.gallery.index=(state.gallery.index+(dx<0?1:-1)+c)%c;renderGallery()}}},{passive:true});
 window.addEventListener('keydown',e=>{if(e.key==='Escape' && $('#modal-root').firstChild)closeModal()});
 init();
