@@ -8,10 +8,71 @@ const dateES=s=>{if(!s)return 'Sin fecha';const [y,m,d]=String(s).slice(0,10).sp
 const classifyPlace=p=>p?.categoria==='Gastronomía'?'Gastronomía':(['Naturaleza','Paseo','Aire libre'].includes(p?.categoria)?'Aire libre':'Cultura');
 const mapsForPlace=p=>'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((p?.nombre||'')+', '+(p?.ciudad||'')+', México');
 const restaurantsNear=p=>'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent('restaurantes cerca de '+(p?.nombre||'')+', '+(p?.ciudad||'')+', México');
-const img=l=>l?.imagen||'/static/img/photo-placeholder.svg';
-const photo=(src,cl='card-img',alt='Fotografía del lugar')=>`<img loading="lazy" class="${cl}" src="${esc(src)}" alt="${esc(alt)}" onerror="this.onerror=null;this.src='/static/img/photo-placeholder.svg'">`;
-function placePhoto(place,cl='card-img'){const src=img(place);const pending=(!src||src==='/static/img/photo-placeholder.svg'||src.endsWith('photo-placeholder.svg'))&&!place?.foto_intentada;return `<img loading="lazy" class="${cl}" src="${esc(src)}" alt="Fotografía de ${esc(place?.nombre||'destino')}" ${pending?`data-place-photo="${esc(place?.id_lugar||'')}"`:''} onerror="this.onerror=null;this.src='/static/img/photo-placeholder.svg'">`}
-async function hydratePlacePhotos(){const nodes=[...document.querySelectorAll('[data-place-photo]')].filter(n=>!n.dataset.photoRequested);for(let i=0;i<nodes.length;i+=3){await Promise.all(nodes.slice(i,i+3).map(async node=>{const id=node.dataset.placePhoto;if(!id||state.photoRequests[id])return;node.dataset.photoRequested='1';state.photoRequests[id]=true;try{const result=await api('/api/catalogo/foto/'+encodeURIComponent(id));const place=placeById(id);if(place)Object.assign(place,result,{foto_intentada:!result.encontrada});if(result.imagen&&result.imagen!=='/static/img/photo-placeholder.svg')node.src=result.imagen;else node.removeAttribute('data-place-photo');}catch(_){const place=placeById(id);if(place)place.foto_intentada=true;node.removeAttribute('data-place-photo')}}))}}
+function commonsImageURL(raw, source){
+ const image=String(raw||'');
+ if(!image.startsWith('https://upload.wikimedia.org/'))return image;
+ const page=String(source||'');
+ const prefix='https://commons.wikimedia.org/wiki/File:';
+ try{
+   let name='';
+   if(page.startsWith(prefix))name=decodeURIComponent(page.slice(prefix.length).split('?')[0]);
+   else{
+     // Algunos registros antiguos no tienen página de fuente, pero conservan
+     // una URL directa de Wikimedia con el nombre original del fichero.
+     const filename=image.split('?')[0].split('/').pop();
+     name=decodeURIComponent(filename||'').replace(/^\d+px-/, '');
+   }
+   name=name.replace(/ /g,'_');
+   if(!name||name.includes('/')||name.includes('\\'))return image;
+   return 'https://commons.wikimedia.org/wiki/Special:Redirect/file/'+encodeURIComponent(name)+'?width=960';
+ }catch(_){return image}
+}
+function brokenPhoto(el){
+ const backup=el.dataset.originalPhoto;
+ if(backup&&el.dataset.photoFallback!=='1'&&el.src!==backup){
+   el.dataset.photoFallback='1';el.src=backup;return;
+ }
+ el.onerror=null;el.src='/static/img/photo-placeholder.svg';
+}
+const img=l=>commonsImageURL(l?.imagen||'/static/img/photo-placeholder.svg',l?.fuente);
+const photo=(src,cl='card-img',alt='Fotografía del lugar')=>`<img loading="lazy" class="${cl}" src="${esc(src)}" alt="${esc(alt)}" onerror="brokenPhoto(this)">`;
+function placePhoto(place,cl='card-img'){const src=img(place);const pending=(!src||src==='/static/img/photo-placeholder.svg'||src.endsWith('photo-placeholder.svg'))&&!place?.foto_intentada;return `<img loading="lazy" class="${cl}" src="${esc(src)}" alt="Fotografía de ${esc(place?.nombre||'destino')}" ${pending?`data-place-photo="${esc(place?.id_lugar||'')}"`:''} data-original-photo="${esc(place?.imagen||'')}" onerror="brokenPhoto(this)">`}
+async function hydratePlacePhotos(){
+ const groups=new Map();
+ for(const node of document.querySelectorAll('[data-place-photo]:not([data-photo-requested])')){
+   const id=node.dataset.placePhoto;
+   if(!id)continue;
+   node.dataset.photoRequested='1';
+   if(!groups.has(id))groups.set(id,[]);
+   groups.get(id).push(node);
+ }
+ const entries=[...groups];
+ for(let i=0;i<entries.length;i+=3){
+   await Promise.all(entries.slice(i,i+3).map(async ([id,nodes])=>{
+     const place=placeById(id);
+     if(state.photoRequests[id]){
+       if(place?.imagen&&place.imagen!=='/static/img/photo-placeholder.svg'){
+         nodes.forEach(n=>{n.dataset.originalPhoto=place.imagen;n.src=commonsImageURL(place.imagen,place.fuente)});
+       }
+       return;
+     }
+     state.photoRequests[id]=true;
+     try{
+       const result=await api('/api/catalogo/foto/'+encodeURIComponent(id));
+       if(place)Object.assign(place,result,{foto_intentada:!result.encontrada});
+       nodes.forEach(n=>{
+         if(result.imagen&&result.imagen!=='/static/img/photo-placeholder.svg'){
+           n.dataset.originalPhoto=result.imagen;
+           n.src=commonsImageURL(result.imagen,result.fuente);
+         }else n.removeAttribute('data-place-photo');
+       });
+     }catch(_){
+       if(place)place.foto_intentada=true;
+       nodes.forEach(n=>n.removeAttribute('data-place-photo'));
+     }
+   }));
+ }
+}
 const tag=(s,cl='')=>`<span class="pill ${cl}">${esc(s)}</span>`;
 function toast(msg,error=false){let el=document.createElement('div');el.className='toast'+(error?' err':'');el.textContent=msg;$('#toast-root').append(el);setTimeout(()=>el.remove(),4500)}
 async function api(url,options={}){const method=(options.method||'GET').toUpperCase();const secure=method!=='GET'&&state.csrf?{'X-CSRF-Token':state.csrf}:{};const opts={...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...secure,...(options.headers||{})}};if(options.body && typeof options.body!=='string')opts.body=JSON.stringify(options.body);
@@ -86,7 +147,7 @@ function renderDock(){let el=$('#dock'),d=state.draft,t=trip();if(!d&&['explorar
 function galleryBody(){
  const g=state.gallery; if(!g)return '';
  const photos=g.fotos||[],index=Math.min(g.index||0,Math.max(0,photos.length-1)),pic=photos[index];
- const frame=pic?`<img src="${esc(pic.imagen)}" alt="Fotografía ${index+1} de ${esc(g.place.nombre)}" onerror="this.onerror=null;this.src='/static/img/photo-placeholder.svg'">`:
+ const frame=pic?`<img src="${esc(commonsImageURL(pic.imagen,pic.fuente))}" data-original-photo="${esc(pic.imagen)}" alt="Fotografía ${index+1} de ${esc(g.place.nombre)}" onerror="brokenPhoto(this)">`:
    '<div class="gallery-empty">Aún no hay una fotografía verificable disponible.</div>';
  const counter=photos.length?`${index+1} / ${photos.length}`:'Sin fotografías verificadas';
  const dots=photos.map((x,i)=>`<button class="gallery-dot ${i===index?'active':''}" aria-label="Ver fotografía ${i+1}" aria-pressed="${i===index}" data-action="gallery-dot" data-index="${i}"></button>`).join('');
