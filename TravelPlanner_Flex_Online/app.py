@@ -47,6 +47,16 @@ if DATABASE_URL and 'sslmode=' not in DATABASE_URL:
 # Cobertura nacional: las 32 entidades federativas. Coordenadas de referencia.
 DESTINOS = DESTINOS_NACIONALES
 
+# Fotografías específicas seleccionadas y atribuidas manualmente.
+# No se altera la base de datos ni se confunden sitios homónimos (e.g. Mercado Hidalgo
+# de Guanajuato vs. Mercado Hidalgo de Veracruz). Para completar más lugares, agregar
+# solo fotos verificadas con su página y licencia reales.
+CURATED_GALLERIES = {'ex21_faed889549380': [{'imagen': 'https://upload.wikimedia.org/wikipedia/commons/0/03/Mercado_rotonda_en_Xalapa.jpg', 'credito': 'Koffermejia', 'licencia': 'CC BY-SA 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Mercado_rotonda_en_Xalapa.jpg', 'tipo': 'lugar'}], 'ex21_bb479626fb840': [{'imagen': 'https://upload.wikimedia.org/wikipedia/commons/0/0f/Malec%C3%B3n_Boca_del_R%C3%ADo.jpg', 'credito': 'Skavania', 'licencia': 'CC BY 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Malec%C3%B3n_Boca_del_R%C3%ADo.jpg', 'tipo': 'lugar'}, {'imagen': 'https://upload.wikimedia.org/wikipedia/commons/a/ac/Municipio_de_Veracruz_vac%C3%ADo_por_cuarentena.jpg', 'credito': 'YanpolGG', 'licencia': 'CC BY-SA 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Municipio_de_Veracruz_vac%C3%ADo_por_cuarentena.jpg', 'tipo': 'lugar'}, {'imagen': 'https://upload.wikimedia.org/wikipedia/commons/5/52/Monumento_de_La_Sirena%2C_Boca_del_R%C3%ADo%2C_Veracruz.jpg', 'credito': 'Skavania', 'licencia': 'CC BY 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Monumento_de_La_Sirena,_Boca_del_R%C3%ADo,_Veracruz.jpg', 'tipo': 'lugar'}]}
+
+def curated_first(place_id):
+    pics = CURATED_GALLERIES.get(str(place_id), [])
+    return dict(pics[0]) if pics else None
+
 # Fotografías reales seleccionadas manualmente de Wikimedia Commons.
 # Se conserva el enlace a la ficha original y la licencia junto a cada foto.
 PLACES = [
@@ -354,6 +364,9 @@ def commons_photo_for_place(db, place_id):
     place = row(db, 'SELECT * FROM lugar WHERE id_lugar=?', (place_id,))
     if not place:
         raise UserError('Lugar no encontrado.', 404)
+    verified = curated_first(place_id)
+    if verified:
+        return {**verified, 'encontrada': True}
     current = place.get('imagen') or ''
     if current and current != PHOTO_PLACEHOLDER and not current.endswith('photo-placeholder.svg'):
         return {'imagen': current, 'credito': place.get('credito') or '',
@@ -464,6 +477,11 @@ def _licensed_photos(query, place, seen):
 def gallery_for_place(db,place_id):
     place = row(db,'SELECT * FROM lugar WHERE id_lugar=?',(place_id,))
     if not place: raise UserError('Lugar no encontrado.',404)
+    verified = CURATED_GALLERIES.get(str(place_id))
+    if verified:
+        return {'fotos': [dict(ph) for ph in verified],
+                'faltantes': max(0,3-len(verified)), 'id_lugar': place_id,
+                'verificacion': 'curada'}
     saved = rows(db,'SELECT imagen,credito,licencia,fuente FROM galeria_lugar WHERE id_lugar=? ORDER BY posicion',(place_id,))
     if len(saved) >= 3 or (_GALLERY_RETRY.get(place_id,0) > time.time()):
         return {'fotos':saved[:3], 'faltantes':max(0,3-len(saved)), 'id_lugar':place_id}
@@ -823,6 +841,9 @@ def api_router(subpath):
         with connect() as db:
             data = rows(db, 'SELECT * FROM lugar WHERE ciudad=? ORDER BY categoria,nombre', (city,)) if city else rows(db, 'SELECT * FROM lugar ORDER BY ciudad,categoria,nombre')
         for item in data:
+            verified = curated_first(item['id_lugar'])
+            if verified:
+                item.update({key: verified[key] for key in ('imagen','credito','licencia','fuente')})
             item['imagen_url'] = item['imagen']
             item['foto_pendiente'] = (item['imagen'] == PHOTO_PLACEHOLDER or str(item['imagen']).endswith('photo-placeholder.svg'))
         return jsonify({'lugares': data, 'destinos': list(DESTINOS.keys()), 'cobertura_entidades': len(DESTINOS)})
