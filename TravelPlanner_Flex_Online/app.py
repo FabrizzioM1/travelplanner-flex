@@ -21,6 +21,7 @@ from urllib.parse import urlencode, urlparse
 
 from catalogo_mexico import DESTINOS_NACIONALES, NATIONAL_PLACES, PHOTO_PLACEHOLDER
 from catalogo_ampliado import EXPANDED_PLACES
+from experiencias_veracruz import EXPERIENCIAS_VERACRUZ, EXPERIENCE_PLACES, PERMISOS, DIR_CONAPESCA
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -330,7 +331,7 @@ def init_db():
         # nombres, costos, fotografías ni otros datos de lugares ya guardados.
         known_ids = {x['id_lugar'] for x in rows(db, 'SELECT id_lugar FROM lugar')}
         pending = []
-        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES):
+        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES) + list(EXPERIENCE_PLACES):
             item = list(place)
             if item[0] in known_ids:
                 continue
@@ -836,6 +837,18 @@ def api_router(subpath):
     qs = request.args
     p = request.get_json(silent=True) or {}
 
+    if path == '/api/experiencias' and method == 'GET':
+        # Catálogo de referencia, sin afirmar que existe disponibilidad en vivo.
+        estado = qs.get('estado', 'Veracruz')
+        actividad = qs.get('actividad', 'Pescar')
+        if estado != 'Veracruz' or actividad != 'Pescar':
+            return jsonify({'experiencias': [], 'actividad': actividad,
+                            'estado': estado, 'nota': 'Esta combinación aún no tiene fichas verificadas.'})
+        return jsonify({'experiencias': EXPERIENCIAS_VERACRUZ, 'actividad': actividad,
+                        'estado': estado, 'permiso_url': PERMISOS,
+                        'directorio_url': DIR_CONAPESCA,
+                        'nota': 'Zonas de consulta, no salidas contratadas. No hay disponibilidad ni precios en vivo.'})
+
     if path == '/api/catalogo' and method == 'GET':
         city = qs.get('ciudad','')
         with connect() as db:
@@ -884,10 +897,20 @@ def api_router(subpath):
                 raise UserError('El lugar ya no está disponible en el catálogo.', 404)
             if place['ciudad'] != t['destino']:
                 raise UserError('El lugar debe pertenecer al destino del viaje seleccionado.')
+            chosen_time = str(p.get('hora_inicio', '10:00'))
+            time_value(chosen_time, 'Hora de actividad')
             day_date = p.get('fecha') or t['fecha_inicio']
             parsed = date_value(day_date, 'Fecha de actividad')
             if not (date_value(t['fecha_inicio']) <= parsed <= date_value(t['fecha_fin'])):
                 raise UserError('La fecha elegida debe estar dentro del viaje.')
+            if str(place['id_lugar']).startswith('exp22_'):
+                repeated = row(db, '''SELECT a.id_actividad FROM actividad a
+                    JOIN itinerario i ON i.id_itinerario=a.id_itinerario
+                    WHERE i.id_viaje=? AND i.fecha=? AND a.lugar_id=?
+                          AND a.hora_inicio=? AND a.estado!='cancelada' ''',
+                    (vid, day_date, place['id_lugar'], chosen_time))
+                if repeated:
+                    raise UserError('Esta experiencia ya está añadida a esa hora. Elige otra fecha u horario.', 409)
             day = row(db, 'SELECT * FROM itinerario WHERE id_viaje=? AND fecha=?', (vid, day_date))
             if not day:
                 cur_day = db.execute('INSERT INTO itinerario(id_viaje,fecha,titulo,descripcion) VALUES (?,?,?,?)',
@@ -898,7 +921,7 @@ def api_router(subpath):
             cur_activity = db.execute('''INSERT INTO actividad
                 (id_itinerario,nombre,hora_inicio,duracion_min,lugar,costo_estimado,categoria,lugar_id,estado)
                 VALUES (?,?,?,?,?,?,?,?,?)''',
-                (day_id, place['nombre'], p.get('hora_inicio', '10:00'), place['duracion_min'],
+                (day_id, place['nombre'], chosen_time, place['duracion_min'],
                  place['nombre'], place['precio_estimado'], place['categoria'], place['id_lugar'], 'planeada'))
             return jsonify({'ok': True, 'id_actividad': cur_activity.lastrowid, 'id_itinerario': day_id}), 201
 
