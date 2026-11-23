@@ -362,13 +362,13 @@ def commons_photo_for_place(db, place_id):
     params = {
         'action': 'query', 'generator': 'search', 'gsrsearch': query,
         'gsrnamespace': 6, 'gsrlimit': 6, 'prop': 'imageinfo',
-        'iiprop': 'url|extmetadata', 'iiurlwidth': 1000,
+        'iiprop': 'url|extmetadata', 'iiurlwidth': 960,
         'iiextmetadatafilter': 'Artist|Credit|LicenseShortName|UsageTerms',
         'format': 'json', 'formatversion': 2,
     }
     uri = 'https://commons.wikimedia.org/w/api.php?' + urlencode(params)
     try:
-        req = Request(uri, headers={'User-Agent': 'TravelPlannerFlex/2.0 (educational travel-planning project)'})
+        req = Request(uri, headers={'User-Agent': 'TravelPlannerFlex/2.2 (https://travelplanner-flex.onrender.com; educational project)'})
         with urlopen(req, timeout=7) as response:
             payload = json.load(response)
         pages = (payload.get('query') or {}).get('pages') or []
@@ -419,12 +419,12 @@ def _licensed_photos(query, place, seen):
     params = {
         'action': 'query', 'generator': 'search', 'gsrsearch': f'filetype:bitmap {query}',
         'gsrnamespace': 6, 'gsrlimit': 25, 'prop': 'imageinfo',
-        'iiprop': 'url|mime|extmetadata', 'iiurlwidth': 1100,
+        'iiprop': 'url|mime|extmetadata', 'iiurlwidth': 960,
         'iiextmetadatafilter': 'Artist|Credit|LicenseShortName|UsageTerms',
         'format': 'json', 'formatversion': 2,
     }
     uri = 'https://commons.wikimedia.org/w/api.php?' + urlencode(params)
-    req = Request(uri, headers={'User-Agent':'TravelPlannerFlex/2.1 (academic project; Wikimedia attribution in UI)'})
+    req = Request(uri, headers={'User-Agent':'TravelPlannerFlex/2.2 (https://travelplanner-flex.onrender.com; educational project)'})
     with urlopen(req, timeout=7) as response:
         payload = json.load(response)
     pages = (payload.get('query') or {}).get('pages') or []
