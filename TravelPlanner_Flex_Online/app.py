@@ -6,6 +6,8 @@ import argparse
 import datetime as dt
 import hashlib
 import html
+import unicodedata
+import time
 import json
 import os
 from pathlib import Path
@@ -18,6 +20,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlencode, urlparse
 
 from catalogo_mexico import DESTINOS_NACIONALES, NATIONAL_PLACES, PHOTO_PLACEHOLDER
+from catalogo_ampliado import EXPANDED_PLACES
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -192,6 +195,15 @@ CREATE TABLE IF NOT EXISTS escenario_viaje (
  id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
  descripcion TEXT NOT NULL, impacto_estimado REAL NOT NULL DEFAULT 0, creado TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS galeria_lugar (
+ id_lugar TEXT NOT NULL REFERENCES lugar(id_lugar) ON DELETE CASCADE,
+ posicion INTEGER NOT NULL CHECK(posicion BETWEEN 1 AND 3),
+ imagen TEXT NOT NULL,
+ credito TEXT NOT NULL DEFAULT '',
+ licencia TEXT NOT NULL DEFAULT '',
+ fuente TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(id_lugar,posicion)
+);
 CREATE INDEX IF NOT EXISTS ix_viaje_usuario ON viaje(id_usuario);
 CREATE INDEX IF NOT EXISTS ix_itinerario_viaje_fecha ON itinerario(id_viaje,fecha);
 """
@@ -304,26 +316,26 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         db.executescript(SCHEMA_PG if DATABASE_URL else SCHEMA)
-        # Siembra incremental y no destructiva: no borra viajes ni reemplaza
-        # fotografías nacionales que ya se hayan resuelto desde Commons.
-        for place in list(PLACES) + list(NATIONAL_PLACES):
+        # Siembra incremental en Neon (una sola operación por lote). No sobrescribe
+        # nombres, costos, fotografías ni otros datos de lugares ya guardados.
+        known_ids = {x['id_lugar'] for x in rows(db, 'SELECT id_lugar FROM lugar')}
+        pending = []
+        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES):
             item = list(place)
+            if item[0] in known_ids:
+                continue
             local_photo = STATIC / 'img' / 'real' / f"{item[0]}.jpg"
             if local_photo.is_file():
-                image_value = f"/static/img/real/{item[0]}.jpg"
+                item[7] = f"/static/img/real/{item[0]}.jpg"
             else:
-                image_value = item[7] or PHOTO_PLACEHOLDER
-            item[7] = image_value
-            db.execute(
+                item[7] = item[7] or PHOTO_PLACEHOLDER
+            pending.append(tuple(item))
+            known_ids.add(item[0])
+        if pending:
+            db.executemany(
                 "INSERT INTO lugar (id_lugar,ciudad,nombre,categoria,etiquetas,lat,lon,imagen,precio_estimado,duracion_min,interior,descripcion,credito,licencia,fuente) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id_lugar) DO NOTHING",
-                tuple(item),
+                pending,
             )
-            # Los 12 lugares originales conservan sus fotos curadas. Los nuevos
-            # lugares empiezan con placeholder y solo se actualizan si hay una
-            # copia local; la búsqueda remota actualiza sus metadatos después.
-            if image_value != PHOTO_PLACEHOLDER:
-                db.execute('UPDATE lugar SET imagen=?,credito=?,licencia=?,fuente=? WHERE id_lugar=?',
-                           (image_value, item[12], item[13], item[14], item[0]))
 
 
 def _plain_commons(value):
@@ -388,6 +400,102 @@ def commons_photo_for_place(db, place_id):
     except Exception as exc:
         app.logger.warning('No se pudo resolver fotografía Commons para %s: %s', place_id, exc)
         return {'imagen': PHOTO_PLACEHOLDER, 'credito': '', 'licencia': '', 'fuente': '', 'encontrada': False}
+
+# Galería adicional. Se consultan únicamente archivos de Wikimedia Commons, con
+# atribución y licencia. Si no hay 3 fotos verificables, NO se inventan imágenes.
+# El almacenamiento es incremental y no toca viajes/reservas ya existentes.
+_GALLERY_RETRY = {}
+
+def _search_words(name):
+    text = unicodedata.normalize('NFKD', str(name).split('·')[0])
+    text = ''.join(c for c in text if not unicodedata.combining(c)).lower()
+    words = re.findall(r'[a-z0-9]+', text)
+    banned = {'de','del','la','el','los','las','y','en','con','zona','centro','historico','restaurantes',
+              'mexico','mexicana','mexicano','parque','nacional','museo','mercado','estado'}
+    return {w for w in words if len(w) > 3 and w not in banned}
+
+def _licensed_photos(query, place, seen):
+    """Búsqueda de imágenes de Commons con licencia publicada y nombre compatible."""
+    params = {
+        'action': 'query', 'generator': 'search', 'gsrsearch': f'filetype:bitmap {query}',
+        'gsrnamespace': 6, 'gsrlimit': 25, 'prop': 'imageinfo',
+        'iiprop': 'url|mime|extmetadata', 'iiurlwidth': 1100,
+        'iiextmetadatafilter': 'Artist|Credit|LicenseShortName|UsageTerms',
+        'format': 'json', 'formatversion': 2,
+    }
+    uri = 'https://commons.wikimedia.org/w/api.php?' + urlencode(params)
+    req = Request(uri, headers={'User-Agent':'TravelPlannerFlex/2.1 (academic project; Wikimedia attribution in UI)'})
+    with urlopen(req, timeout=7) as response:
+        payload = json.load(response)
+    pages = (payload.get('query') or {}).get('pages') or []
+    if isinstance(pages, dict): pages = list(pages.values())
+    key_words = _search_words(place['nombre'])
+    results = []
+    for page in pages:
+        infos = page.get('imageinfo') or []
+        if not infos: continue
+        info = infos[0]
+        title = page.get('title','')
+        lowered = title.lower()
+        if any(w in lowered for w in ('mapa', 'logo', 'icon.', 'bandera', 'escudo', 'plano ', 'map ', 'poster')):
+            continue
+        normalized = _search_words(title)
+        if key_words and not key_words.intersection(normalized):
+            continue
+        url = info.get('thumburl') or info.get('url') or ''
+        if not (url.startswith('https://upload.wikimedia.org/') and
+                info.get('mime','').lower() in ('image/jpeg','image/png','image/webp')):
+            continue
+        source = info.get('descriptionurl') or 'https://commons.wikimedia.org/wiki/'+title.replace(' ','_')
+        if not source.startswith('https://commons.wikimedia.org/'):
+            continue
+        meta = info.get('extmetadata') or {}
+        lic = _plain_commons((meta.get('LicenseShortName') or {}).get('value') or
+                             (meta.get('UsageTerms') or {}).get('value'))
+        if not lic: continue
+        if url in seen or source in seen: continue
+        seen.add(url); seen.add(source)
+        author = _plain_commons((meta.get('Artist') or {}).get('value') or
+                                (meta.get('Credit') or {}).get('value')) or 'Ver ficha en Wikimedia Commons'
+        results.append({'imagen':url,'credito':author[:250], 'licencia':lic[:150],
+                        'fuente':source, 'tipo':'lugar'})
+    return results
+
+def gallery_for_place(db,place_id):
+    place = row(db,'SELECT * FROM lugar WHERE id_lugar=?',(place_id,))
+    if not place: raise UserError('Lugar no encontrado.',404)
+    saved = rows(db,'SELECT imagen,credito,licencia,fuente FROM galeria_lugar WHERE id_lugar=? ORDER BY posicion',(place_id,))
+    if len(saved) >= 3 or (_GALLERY_RETRY.get(place_id,0) > time.time()):
+        return {'fotos':saved[:3], 'faltantes':max(0,3-len(saved)), 'id_lugar':place_id}
+    photos = list(saved)
+    seen = {x['imagen'] for x in photos} | {x['fuente'] for x in photos}
+    primary = place.get('imagen') or ''
+    primary_source = str(place.get('fuente') or '')
+    primary_license = str(place.get('licencia') or '')
+    if (not photos and primary and primary != PHOTO_PLACEHOLDER and
+            not primary.endswith('photo-placeholder.svg') and
+            primary.startswith(('https://upload.wikimedia.org/','/static/img/real/')) and
+            primary_source.startswith('https://commons.wikimedia.org/wiki/File:') and
+            primary_license and not primary_license.lower().startswith('consultar')):
+        photos.append({'imagen':primary,'credito':place.get('credito') or 'Consultar autor',
+                       'licencia':place.get('licencia') or 'Consultar licencia en origen',
+                       'fuente':place.get('fuente') or '', 'tipo':'lugar'})
+        seen.add(primary); seen.add(place.get('fuente') or '')
+    short = str(place['nombre']).split('·')[0].strip()
+    try:
+        for query in (f'"{short}" {place["ciudad"]}', f'{short} Mexico'):
+            if len(photos) >= 3: break
+            for candidate in _licensed_photos(query,place,seen):
+                if len(photos) >= 3: break
+                photos.append(candidate)
+    except Exception as exc:
+        app.logger.warning('Commons temporalmente no disponible para %s: %s', place_id, exc)
+    for i,ph in enumerate(photos[:3],1):
+        db.execute('INSERT INTO galeria_lugar(id_lugar,posicion,imagen,credito,licencia,fuente) VALUES (?,?,?,?,?,?) ON CONFLICT(id_lugar,posicion) DO NOTHING',
+                   (place_id,i,ph['imagen'],ph['credito'],ph['licencia'],ph['fuente']))
+    _GALLERY_RETRY[place_id] = time.time() + (86400 if len(photos)<3 else 3600)
+    stored = rows(db,'SELECT imagen,credito,licencia,fuente FROM galeria_lugar WHERE id_lugar=? ORDER BY posicion',(place_id,))
+    return {'fotos':stored[:3], 'faltantes':max(0,3-len(stored)), 'id_lugar':place_id}
 
 def date_value(v,label="Fecha"):
     try:
@@ -736,6 +844,10 @@ def api_router(subpath):
         return jsonify({'id_viaje': tid}), 201
 
     bits = path.strip('/').split('/')
+
+    if len(bits) == 4 and bits[:3] == ['api', 'catalogo', 'galeria'] and method == 'GET':
+        with connect() as db:
+            return jsonify(gallery_for_place(db, bits[3]))
 
     if len(bits) == 4 and bits[:3] == ['api', 'catalogo', 'foto'] and method == 'GET':
         with connect() as db:
