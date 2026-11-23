@@ -22,6 +22,11 @@ from urllib.parse import urlencode, urlparse
 from catalogo_mexico import DESTINOS_NACIONALES, NATIONAL_PLACES, PHOTO_PLACEHOLDER
 from catalogo_ampliado import EXPANDED_PLACES
 from experiencias_veracruz import EXPERIENCIAS_VERACRUZ, EXPERIENCE_PLACES, PERMISOS, DIR_CONAPESCA
+from municipios_recomendados import (
+    MUNICIPIOS_CON_COBERTURA, ACTIVIDADES_CON_COBERTURA,
+    PREFERENCIAS_NATURALEZA, SITIOS_CATEMACO, FOTOS_CATEMACO,
+    lugares_para_sembrar, recomendar
+)
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -53,6 +58,9 @@ DESTINOS = DESTINOS_NACIONALES
 # de Guanajuato vs. Mercado Hidalgo de Veracruz). Para completar más lugares, agregar
 # solo fotos verificadas con su página y licencia reales.
 CURATED_GALLERIES = {'ex21_faed889549380': [{'imagen': 'https://upload.wikimedia.org/wikipedia/commons/0/03/Mercado_rotonda_en_Xalapa.jpg', 'credito': 'Koffermejia', 'licencia': 'CC BY-SA 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Mercado_rotonda_en_Xalapa.jpg', 'tipo': 'lugar'}], 'ex21_bb479626fb840': [{'imagen': 'https://upload.wikimedia.org/wikipedia/commons/0/0f/Malec%C3%B3n_Boca_del_R%C3%ADo.jpg', 'credito': 'Skavania', 'licencia': 'CC BY 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Malec%C3%B3n_Boca_del_R%C3%ADo.jpg', 'tipo': 'lugar'}, {'imagen': 'https://upload.wikimedia.org/wikipedia/commons/a/ac/Municipio_de_Veracruz_vac%C3%ADo_por_cuarentena.jpg', 'credito': 'YanpolGG', 'licencia': 'CC BY-SA 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Municipio_de_Veracruz_vac%C3%ADo_por_cuarentena.jpg', 'tipo': 'lugar'}, {'imagen': 'https://upload.wikimedia.org/wikipedia/commons/5/52/Monumento_de_La_Sirena%2C_Boca_del_R%C3%ADo%2C_Veracruz.jpg', 'credito': 'Skavania', 'licencia': 'CC BY 4.0', 'fuente': 'https://commons.wikimedia.org/wiki/File:Monumento_de_La_Sirena,_Boca_del_R%C3%ADo,_Veracruz.jpg', 'tipo': 'lugar'}]}
+
+# Solo imágenes identificadas para su recinto; quedan con créditos de Wikimedia.
+CURATED_GALLERIES.update(FOTOS_CATEMACO)
 
 def curated_first(place_id):
     pics = CURATED_GALLERIES.get(str(place_id), [])
@@ -331,7 +339,7 @@ def init_db():
         # nombres, costos, fotografías ni otros datos de lugares ya guardados.
         known_ids = {x['id_lugar'] for x in rows(db, 'SELECT id_lugar FROM lugar')}
         pending = []
-        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES) + list(EXPERIENCE_PLACES):
+        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES) + list(EXPERIENCE_PLACES) + lugares_para_sembrar(PHOTO_PLACEHOLDER):
             item = list(place)
             if item[0] in known_ids:
                 continue
@@ -836,6 +844,29 @@ def api_router(subpath):
     method = request.method
     qs = request.args
     p = request.get_json(silent=True) or {}
+
+    if path == '/api/recomendaciones-municipio' and method == 'GET':
+        # Solo fichas municipales con fuente pública revisada. No se infiere
+        # pertenencia a un municipio usando únicamente el campo estatal.
+        estado = qs.get('estado', 'Veracruz')[:80]
+        municipio = qs.get('municipio', 'Catemaco')[:100]
+        actividad = qs.get('actividad', 'Naturaleza')[:50]
+        interes = qs.get('interes', 'Todas')[:70]
+        lugares = recomendar(estado, municipio, actividad, interes)
+        return jsonify({
+            'lugares': lugares,
+            'estados': list(DESTINOS.keys()),
+            'municipios': MUNICIPIOS_CON_COBERTURA,
+            'actividades': ACTIVIDADES_CON_COBERTURA,
+            'preferencias': PREFERENCIAS_NATURALEZA,
+            'total': len(lugares),
+            'cobertura': 'Catemaco, Veracruz · Naturaleza (catálogo piloto documentado)',
+            'criterios': {'coincidencia_actividad': 40,'municipio':25,
+                'afinidad_interes':15,'respaldo_fuente':15,'ficha':5},
+            'aviso': ('Puntaje de pertinencia 0–100, NO ranking por visitantes, '
+                'reseñas, seguridad, precio o popularidad. En otras combinaciones '
+                'se mostrarán resultados cuando haya fichas municipales revisadas.'),
+        })
 
     if path == '/api/experiencias' and method == 'GET':
         # Catálogo de referencia, sin afirmar que existe disponibilidad en vivo.
