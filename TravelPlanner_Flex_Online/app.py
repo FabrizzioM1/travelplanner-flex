@@ -22,6 +22,15 @@ from urllib.parse import urlencode, urlparse
 from catalogo_mexico import DESTINOS_NACIONALES, NATIONAL_PLACES, PHOTO_PLACEHOLDER
 from catalogo_ampliado import EXPANDED_PLACES
 from experiencias_veracruz import EXPERIENCIAS_VERACRUZ, EXPERIENCE_PLACES, PERMISOS, DIR_CONAPESCA
+from municipios_veracruz import (
+    MUNICIPIOS as VERACRUZ_MUNICIPIOS, CATEGORIAS as MUNICIPAL_CATEGORIAS,
+    INTERESES as MUNICIPAL_INTERESES, overpass_query, nearby_query,
+    extract_osm, score as puntuar_osm, norm as normalizar_mun, OSM_URL
+)
+import threading
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+
 from municipios_recomendados import (
     MUNICIPIOS_CON_COBERTURA, ACTIVIDADES_CON_COBERTURA,
     PREFERENCIAS_NATURALEZA, SITIOS_CATEMACO, FOTOS_CATEMACO,
@@ -355,6 +364,10 @@ def init_db():
                 "INSERT INTO lugar (id_lugar,ciudad,nombre,categoria,etiquetas,lat,lon,imagen,precio_estimado,duracion_min,interior,descripcion,credito,licencia,fuente) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id_lugar) DO NOTHING",
                 pending,
             )
+        # Nueva tabla aditiva: no altera usuarios, viajes ni tablas antiguas.
+        db.execute("""CREATE TABLE IF NOT EXISTS cache_consulta_municipio (
+            clave TEXT PRIMARY KEY, payload TEXT NOT NULL, actualizado TEXT NOT NULL
+        )""")
 
 
 def _plain_commons(value):
@@ -838,6 +851,163 @@ def api_logout():
     return jsonify({'ok': True})
 
 
+
+# Consulta geográfica bajo demanda (solo tras presionar Buscar).
+# No consultar automáticamente 212 municipios, ni usar el servicio OSM masivamente.
+_OSM_QUERY_LOCK = threading.Lock()
+_last_osm_access = 0.0
+_osm_blocked_until = 0.0
+
+
+def _read_cache(key):
+    with connect() as db:
+        return row(db, 'SELECT payload,actualizado FROM cache_consulta_municipio WHERE clave=?', (key,))
+
+
+def _write_cache(key, payload):
+    with connect() as db:
+        db.execute('''INSERT INTO cache_consulta_municipio(clave,payload,actualizado)
+            VALUES(?,?,?) ON CONFLICT(clave) DO UPDATE
+            SET payload=excluded.payload, actualizado=excluded.actualizado''',
+            (key, json.dumps(payload, ensure_ascii=False), dt.datetime.now(dt.timezone.utc).isoformat()))
+
+
+def _get_osm(key, query, ttl_days=7):
+    '''Caché persistente en Neon y límite compartido por proceso.
+    Si Overpass falla se prefiere una caché antigua antes que inventar sitios.
+    '''
+    global _last_osm_access, _osm_blocked_until
+    cached = _read_cache(key)
+    old = None
+    if cached:
+        try:
+            old = json.loads(cached['payload'])
+            ts = dt.datetime.fromisoformat(cached['actualizado'])
+            if ts.tzinfo is None: ts=ts.replace(tzinfo=dt.timezone.utc)
+            if (dt.datetime.now(dt.timezone.utc)-ts).total_seconds()<ttl_days*86400:
+                return old, 'cache'
+        except (ValueError,TypeError,KeyError): pass
+    if os.environ.get('TP24_OFFLINE') == '1':
+        return old, 'offline'
+    if time.time() < _osm_blocked_until:
+        return old, 'limitado'
+    if not _OSM_QUERY_LOCK.acquire(blocking=False):
+        return old, 'ocupado'
+    try:
+        if time.time() < _osm_blocked_until: return old, 'limitado'
+        # En Render Free 14 s de espera de red puede ser más; bloquear a nivel de app por instante.
+        if time.time() - _last_osm_access < 6:
+            return old, 'pausa'
+        _last_osm_access = time.time()
+        data = urlencode({'data':query}).encode('utf-8')
+        req = Request(OSM_URL, data=data, headers={
+            'User-Agent':'TravelPlannerFlex/2.4 (educational webapp; https://travelplanner-flex.onrender.com)',
+            'Accept':'application/json',
+            'Content-Type':'application/x-www-form-urlencoded'})
+        with urlopen(req,timeout=19) as r:
+            result = json.load(r)
+        if not isinstance(result,dict) or not isinstance(result.get('elements'),list):
+            raise ValueError('Respuesta OSM inválida')
+        _write_cache(key,result)
+        return result,'openstreetmap'
+    except HTTPError as err:
+        if err.code in (429,502,503,504):_osm_blocked_until=time.time()+180
+        app.logger.warning('OSM consulta %s: HTTP %s', key, err.code)
+        return old, 'no-disponible'
+    except (URLError,TimeoutError,ValueError, OSError) as err:
+        app.logger.warning('OSM consulta %s: %s',key,type(err).__name__)
+        return old,'no-disponible'
+    finally:
+        _OSM_QUERY_LOCK.release()
+
+
+def _upsert_osm_lugares(items):
+    '''Sólo agrega OSM con id único; no toca filas existentes del catálogo.'''
+    if not items:return
+    records=[]
+    for item in items:
+        records.append((item['id_lugar'],'Veracruz',item['nombre'],item['categoria'],
+            (';'.join(item.get('etiquetas') or []) + ';Origen OSM'),
+            item['lat'],item['lon'],PHOTO_PLACEHOLDER,0,90,0,item['descripcion'],
+            'Contribuidores de OpenStreetMap','ODbL 1.0',item['fuente']))
+    with connect() as db:
+        db.executemany('''INSERT INTO lugar
+          (id_lugar,ciudad,nombre,categoria,etiquetas,lat,lon,imagen,precio_estimado,duracion_min,interior,descripcion,credito,licencia,fuente)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id_lugar) DO NOTHING''',records)
+
+
+def _municipio_recomendaciones(estado,municipio,actividad,interes,cerca=False):
+    if estado!='Veracruz':
+        raise UserError('La cobertura de municipios está disponible primero para Veracruz.')
+    if municipio not in VERACRUZ_MUNICIPIOS:
+        raise UserError('Selecciona un municipio válido de Veracruz.')
+    if actividad not in MUNICIPAL_CATEGORIAS:
+        raise UserError('Selecciona una actividad válida.')
+    if interes not in MUNICIPAL_INTERESES:
+        interes='Todos'
+
+    # Conservar los 8 sitios verificados del piloto Catemaco.
+    curated = recomendar(estado,municipio,'Naturaleza','Todas') if municipio=='Catemaco' and actividad in ('Naturaleza','Todas') else []
+    for item in curated:
+        item['categoria']='Naturaleza'
+        item['cerca']=False
+        item['tipo_fuente']=item.get('tipo_fuente','Fuente oficial')
+        item['tipo_precio']='Consultar tarifa'
+        # Recalcular afinidad cuando hay selección de interés.
+        if interes!='Todos':
+            affinity=15 if any(normalizar_mun(interes)==normalizar_mun(t) or normalizar_mun(interes) in normalizar_mun(t) for t in item.get('subactividades',[])) else 0
+            item['puntaje']=item['puntaje'] - item['desglose'][2]['puntos'] + affinity
+            item['desglose'][2]['puntos']=affinity
+            item['desglose'][2]['criterio']='Interés seleccionado'
+    raw,status = _get_osm('ver:limite:'+municipio,overpass_query(municipio))
+    found,center,has_area=extract_osm(raw,municipio) if raw else ([],None,False)
+    # Nunca describir puntos cerca como dentro del municipio.
+    nearby=[];nearstatus=None
+    if cerca and center and all(v is not None for v in center):
+        near_raw,nearstatus=_get_osm('ver:cerca:'+municipio,nearby_query(*center))
+        if near_raw:
+            nearby, _, _ = extract_osm(near_raw,municipio,nearby=True,center=center)
+            inner={(normalizar_mun(x['nombre']),round(float(x['lat']),3),round(float(x['lon']),3)) for x in found if x.get('lat') and x.get('lon')}
+            nearby=[x for x in nearby if (normalizar_mun(x['nombre']),round(float(x['lat']),3),round(float(x['lon']),3)) not in inner]
+    osm_items=[]
+    for item in found + nearby:
+        result=puntuar_osm(item,actividad,interes)
+        if not result:continue
+        item['puntaje'],item['desglose']=result
+        item['motivo']=('Coincide con la actividad e interés seleccionados. ' +
+                     ('Su posición está dentro de la relación municipal de OSM.' if not item['cerca'] else
+                      'Está en un radio cercano; municipio exacto por verificar.'))
+        item['acceso']='La ficha OSM es colaborativa. Consulta horarios, seguridad, permisos y servicios antes de acudir.'
+        item['tipo_precio']='Consultar tarifa'
+        item['subactividades']=item.get('etiquetas',[])
+        item['imagen']=PHOTO_PLACEHOLDER
+        osm_items.append(item)
+    if osm_items:_upsert_osm_lugares(osm_items)
+    # Evita fichas duplicadas de Catemaco en catálogo curado/OSM.
+    seen={normalizar_mun(x['nombre']) for x in curated}
+    results=list(curated)
+    for item in sorted(osm_items,key=lambda x:(-x['puntaje'],x['nombre'])):
+        key=normalizar_mun(item['nombre'])
+        if key not in seen:
+            seen.add(key);results.append(item)
+    results.sort(key=lambda x:(-x['puntaje'],bool(x.get('cerca')),x['nombre']))
+    # Limitar resultados para no saturar la interfaz ni el servidor.
+    return {
+        'lugares':results[:75], 'total':len(results),
+        'municipios':{'Veracruz':list(VERACRUZ_MUNICIPIOS)},
+        'estados':['Veracruz'], 'actividades':list(MUNICIPAL_CATEGORIAS),
+        'preferencias':list(MUNICIPAL_INTERESES),
+        'estado':estado,'municipio':municipio,
+        'origen':'catálogo curado + OSM consultado bajo demanda',
+        'fuente_municipios':'https://www.inegi.org.mx/servicios/catalogounico/',
+        'osm_fuente':'https://www.openstreetmap.org/copyright',
+        'estado_consulta':status,'estado_cercania':nearstatus,
+        'limite_municipal_encontrado':has_area,'incluye_cercanos':cerca,
+        'centro_referencia':list(center) if center else None,
+        'criterios':{'coincidencia_actividad':40,'municipio':25,'afinidad_interes':15,'respaldo_fuente':15,'ficha':5},
+        'aviso':'Coincidencia 0–100, NO número de visitas, calidad, precio ni reseñas. OSM es una fuente colaborativa incompleta. Los lugares cercanos pueden pertenecer a otro municipio.'
+    }
+
 @app.route('/api/<path:subpath>', methods=['GET','POST','PUT','DELETE'])
 def api_router(subpath):
     path = '/api/' + subpath
@@ -845,28 +1015,16 @@ def api_router(subpath):
     qs = request.args
     p = request.get_json(silent=True) or {}
 
+    if path == '/api/municipios-veracruz' and method == 'GET':
+        return jsonify({'estados':['Veracruz'], 'municipios':{'Veracruz':list(VERACRUZ_MUNICIPIOS)}, 'actividades':list(MUNICIPAL_CATEGORIAS), 'intereses':list(MUNICIPAL_INTERESES), 'total_municipios':len(VERACRUZ_MUNICIPIOS)})
+
     if path == '/api/recomendaciones-municipio' and method == 'GET':
-        # Solo fichas municipales con fuente pública revisada. No se infiere
-        # pertenencia a un municipio usando únicamente el campo estatal.
         estado = qs.get('estado', 'Veracruz')[:80]
         municipio = qs.get('municipio', 'Catemaco')[:100]
         actividad = qs.get('actividad', 'Naturaleza')[:50]
-        interes = qs.get('interes', 'Todas')[:70]
-        lugares = recomendar(estado, municipio, actividad, interes)
-        return jsonify({
-            'lugares': lugares,
-            'estados': list(DESTINOS.keys()),
-            'municipios': MUNICIPIOS_CON_COBERTURA,
-            'actividades': ACTIVIDADES_CON_COBERTURA,
-            'preferencias': PREFERENCIAS_NATURALEZA,
-            'total': len(lugares),
-            'cobertura': 'Catemaco, Veracruz · Naturaleza (catálogo piloto documentado)',
-            'criterios': {'coincidencia_actividad': 40,'municipio':25,
-                'afinidad_interes':15,'respaldo_fuente':15,'ficha':5},
-            'aviso': ('Puntaje de pertinencia 0–100, NO ranking por visitantes, '
-                'reseñas, seguridad, precio o popularidad. En otras combinaciones '
-                'se mostrarán resultados cuando haya fichas municipales revisadas.'),
-        })
+        interes = qs.get('interes', 'Todos')[:70]
+        cerca = qs.get('cerca', '0') == '1'
+        return jsonify(_municipio_recomendaciones(estado,municipio,actividad,interes,cerca))
 
     if path == '/api/experiencias' and method == 'GET':
         # Catálogo de referencia, sin afirmar que existe disponibilidad en vivo.
