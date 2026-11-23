@@ -1,7 +1,7 @@
 /* TravelPlanner Flex — interfaz sin dependencias externas. JS para la vista; Python para datos. */
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const state={tab:'inicio',trips:[],tripId:null,detail:null,catalog:[],destinations:[],filter:'Todos',city:'Veracruz',exploreDestination:null,exploreMode:'lugares',catalogSearch:'',transportOrigin:'',photoRequests:{},draft:null,pendingPlaceId:null,pendingRecommendation:null,authed:false,modal:null,voter:null,weather:null,csrf:null,gallery:null};
+const state={tab:'inicio',trips:[],tripId:null,detail:null,catalog:[],destinations:[],filter:'Todos',city:'Veracruz',exploreDestination:null,exploreMode:'lugares',catalogSearch:'',transportOrigin:'',photoRequests:{},draft:null,pendingPlaceId:null,pendingRecommendation:null,authed:false,modal:null,voter:null,weather:null,csrf:null,gallery:null,experiences:[],experienceMode:'Pescar',experienceRegion:'Veracruz',experienceZone:'Todas',experienceType:'Todas',experienceLevel:'Todos',experiencePhotoIndex:0,experienceDetail:null};
 const money=n=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(Number(n)||0);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dateES=s=>{if(!s)return 'Sin fecha';const [y,m,d]=String(s).slice(0,10).split('-');return `${d}/${m}/${y}`};
@@ -91,14 +91,14 @@ async function api(url,options={}){const method=(options.method||'GET').toUpperC
  const r=await fetch(url,opts);let d;try{d=await r.json()}catch{throw Error('El servidor no respondió correctamente.')}if(!r.ok)throw Error(d.error||'Error de conexión');return d}
 function fail(err){toast(err.message||'Ocurrió un error',true)}
 async function init(){try{let res=await api('/api/estado');state.csrf=res.csrf;if(res.autenticado)await authDone();else{$('#login').classList.remove('hidden');$('#shell').classList.add('hidden')}}catch(e){fail(e)}}
-async function authDone(){state.authed=true;$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');let cat=await api('/api/catalogo');state.catalog=cat.lugares;state.destinations=cat.destinos||[];await loadTrips();if(!state.exploreDestination)state.exploreDestination=trip()?.destino||'Veracruz';render()}
+async function authDone(){state.authed=true;$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');let cat=await api('/api/catalogo');state.catalog=cat.lugares;state.destinations=cat.destinos||[];const xp=await api('/api/experiencias?estado=Veracruz&actividad=Pescar');state.experiences=xp.experiencias||[];await loadTrips();if(!state.exploreDestination)state.exploreDestination=trip()?.destino||'Veracruz';render()}
 async function loadTrips(id){const x=await api('/api/viajes');state.trips=x.viajes;const ids=state.trips.map(t=>t.id_viaje);if(id && ids.includes(Number(id)))state.tripId=Number(id);else if(!ids.includes(state.tripId))state.tripId=ids[0]||null;await loadDetail()}
 async function loadDetail(){if(!state.tripId){state.detail=null;return}state.detail=await api('/api/viajes/'+state.tripId);if(!state.voter || !state.detail.viajeros.some(v=>v.id_viajero===state.voter))state.voter=state.detail.viajeros[0]?.id_viajero||null}
 function trip(){return state.detail?.viaje||null}
 function placeById(id){return state.catalog.find(l=>l.id_lugar===id)}
 function renderNav(){let sel=$('#trip-select');sel.innerHTML=state.trips.length?state.trips.map(t=>`<option value="${t.id_viaje}" ${t.id_viaje===state.tripId?'selected':''}>${esc(t.nombre)}</option>`).join(''):'<option value="">Sin viajes</option>';
  $$('[data-nav]').forEach(x=>x.classList.toggle('active',x.dataset.nav===state.tab))}
-function render(){renderNav();let content={inicio:home,explorar:explore,agenda:agenda,reservas:reservations,finanzas:finance,grupo:group,ajustes:settings}[state.tab]||home;$('#content').innerHTML=content();renderDock();hydratePlacePhotos()}
+function render(){renderNav();let content={inicio:home,explorar:explore,experiencias:experiences,agenda:agenda,reservas:reservations,finanzas:finance,grupo:group,ajustes:settings}[state.tab]||home;$('#content').innerHTML=content();renderDock();hydratePlacePhotos()}
 function go(tab){if(tab==='explorar'&&!state.exploreDestination)state.exploreDestination=trip()?.destino||'Veracruz';state.tab=tab;state.filter='Todos';render();window.scrollTo({top:0,behavior:'smooth'})}
 function header(eyebrow,title,sub,button=''){return `<div class="titlebar"><div><span class="eyebrow">${eyebrow}</span><h2>${title}</h2><p>${sub}</p></div>${button}</div>`}
 function empty(label='Primero crea un viaje',sub='Tu siguiente aventura empieza con un destino y unas fechas.'){
@@ -108,7 +108,7 @@ function home(){let t=trip(),b=state.detail?.presupuesto;if(!t)return header('OR
  let mainPic=state.catalog.find(p=>p.ciudad===t.destino);return `<section class="hero"><div class="hero-info"><span class="eyebrow" style="color:#74d9d2">TU PRÓXIMA EXPERIENCIA</span><h1>Los mejores viajes<br>comienzan con un plan.</h1><p>Descubre experiencias, arma tu ruta y reacciona a los imprevistos sin perder el control de tu dinero.</p><div class="btn-group"><button class="btn light" data-action="newtrip">+ Nuevo viaje</button><button class="btn primary" data-nav="explorar">Explorar lugares ↗</button></div></div><div class="hero-photo">${placePhoto(mainPic,'')}</div></section>
  <section class="section">${header('MI VIAJE ACTUAL',esc(t.nombre),esc(t.destino)+' · '+dateES(t.fecha_inicio)+' al '+dateES(t.fecha_fin))}
  <div class="grid grid-4"><div class="stat"><div class="tiny muted">Presupuesto</div><div class="number">${money(b.presupuesto.monto_total)}</div></div><div class="stat"><div class="tiny muted">Gastos reales</div><div class="number">${money(b.gasto_real)}</div></div><div class="stat emph"><div class="tiny muted">Disponible</div><div class="number" style="color:${b.saldo<0?'#bb433b':'#12847b'}">${money(b.saldo)}</div></div><div class="stat"><div class="tiny muted">Actividades previstas</div><div class="number">${state.detail.dias.reduce((s,d)=>s+d.actividades.length,0)}</div></div></div></section>
- <section class="section"><div class="section-heading"><div><h3>¿Qué quieres hacer?</h3><p>Cada módulo se conecta con el mismo viaje.</p></div></div><div class="module-links"><button data-nav="explorar">◈ Ver lugares con fotos</button><button data-nav="agenda">▦ Organizar días</button><button data-nav="reservas">▤ Hospedaje y transporte</button><button data-nav="finanzas">◉ Controlar presupuesto</button><button data-nav="grupo">♧ Votar en grupo</button></div></section>
+ <section class="section"><div class="section-heading"><div><h3>¿Qué quieres hacer?</h3><p>Cada módulo se conecta con el mismo viaje.</p></div></div><div class="module-links"><button data-nav="explorar">◈ Ver lugares con fotos</button><button data-nav="experiencias">🎣 Buscar por actividad</button><button data-nav="agenda">▦ Organizar días</button><button data-nav="reservas">▤ Hospedaje y transporte</button><button data-nav="finanzas">◉ Controlar presupuesto</button><button data-nav="grupo">♧ Votar en grupo</button></div></section>
  <section class="section">${state.detail.alertas.map(a=>`<div class="alertbox ${a.level==='danger'?'danger':''}">⚠ ${esc(a.text)}</div>`).join('')}
  <div class="section-heading"><h3>Mis viajes</h3><button class="btn outline sm" data-action="newtrip">+ Crear otro</button></div>${tripTiles()}</section>
  <section class="section callout">✦ <strong>TravelPlanner Flex</strong> propone alternativas y detecta horarios encimados. Las fotografías del catálogo son imágenes reales seleccionadas de Wikimedia Commons; consulta el crédito y la licencia en los detalles de cada lugar. Los costos son estimaciones de demostración, no tarifas oficiales.</section>`}
@@ -119,6 +119,7 @@ function explore(){
  const filtered=allPlaces.filter(p=>(state.filter==='Todos'||classifyPlace(p)===state.filter)&&(!query||`${p.nombre} ${p.descripcion} ${p.categoria}`.toLocaleLowerCase('es-MX').includes(query)));
  const cats=['Todos','Cultura','Aire libre','Gastronomía'];
  const tabs=[['lugares','Lugares'],['hospedaje','Hoteles'],['transporte','Transporte']];
+ const expShortcut=`<div class="experience-shortcut"><div><strong>🎣 ¿Buscas algo que hacer?</strong><span>Pesca deportiva y otras experiencias, sin elegir destino primero.</span></div><button class="btn primary" data-nav="experiencias">Explorar por actividad →</button></div>`;
  const tabHtml=`<div class="explore-tabs">${tabs.map(([key,label])=>`<button class="${state.exploreMode===key?'active':''}" data-action="explore-mode" data-mode="${key}">${label}</button>`).join('')}</div>`;
  const selector=`<div class="destination-search"><div class="field"><label for="city-filter">Destino o entidad</label><select id="city-filter">${state.destinations.map(c=>`<option value="${esc(c)}" ${destination===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="destination-note"><strong>${allPlaces.length} lugares destacados</strong><span>Catálogo nacional · México</span></div></div>`;
  let panel='';
@@ -134,8 +135,67 @@ function explore(){
    const bus=[['ADO','https://www.ado.com.mx/'],['ETN Turistar','https://etn.com.mx/'],['Primera Plus','https://www.primeraplus.com.mx/'],['Autobuses Futura','https://www.futura.com.mx/'],['Ómnibus de México','https://www.odm.com.mx/']];const air=[['Volaris','https://www.volaris.com/'],['Viva','https://www.vivaaerobus.com/'],['Aeroméxico','https://www.aeromexico.com/']];
    panel=`<div class="recommendation-intro"><span class="eyebrow">COMPARA CÓMO LLEGAR</span><h3>Opciones de transporte hacia ${esc(destination)}</h3><p>Indica desde dónde sales. Las rutas, horarios y tarifas dependen de la fecha y de la cobertura de cada proveedor.</p></div><div class="transport-origin"><div class="field"><label for="transport-origin">¿Desde dónde viajas?</label><input id="transport-origin" type="text" placeholder="Ej. Veracruz, Veracruz" value="${esc(origin)}"></div><button class="btn primary" data-action="refresh-transport">Actualizar ruta</button></div><div class="grid grid-2 recommendation-grid"><article class="card recommendation-card"><div class="recommendation-icon">▤</div><div class="recommendation-body"><span class="pill">Autobús</span><h4>Compara líneas de autobús</h4><p>Consulta cobertura de ruta, terminales, horarios y equipaje directamente con la empresa.</p><div class="provider-links">${bus.map(([name,url])=>`<a class="provider-link" href="${url}" target="_blank" rel="noopener noreferrer">${name} ↗</a>`).join('')}<a class="provider-link" href="${busSearch}" target="_blank" rel="noopener noreferrer">Buscar esta ruta ↗</a></div><button class="btn sm soft" data-action="register-transport" data-type="autobus">Registrar autobús en mi viaje</button></div></article><article class="card recommendation-card"><div class="recommendation-icon">✈</div><div class="recommendation-body"><span class="pill">Avión</span><h4>Compara vuelos</h4><p>Revisa aeropuertos cercanos, escalas, equipaje y cargos adicionales.</p><div class="provider-links">${air.map(([name,url])=>`<a class="provider-link" href="${url}" target="_blank" rel="noopener noreferrer">${name} ↗</a>`).join('')}<a class="provider-link" href="${flightSearch}" target="_blank" rel="noopener noreferrer">Google Flights ↗</a></div><button class="btn sm soft" data-action="register-transport" data-type="avion">Registrar vuelo en mi viaje</button></div></article><article class="card recommendation-card"><div class="recommendation-icon">⌖</div><div class="recommendation-body"><span class="pill">Automóvil</span><h4>Consulta una ruta por carretera</h4><p>Revisa recorrido, casetas y condiciones viales antes de salir.</p><div class="provider-links"><a class="btn sm outline" href="${mapRoute}" target="_blank" rel="noopener noreferrer">Abrir ruta en Google Maps ↗</a></div><button class="btn sm soft" data-action="register-transport" data-type="auto">Registrar automóvil en mi viaje</button></div></article><article class="card recommendation-card"><div class="recommendation-icon">⇄</div><div class="recommendation-body"><span class="pill">Transporte local</span><h4>Muévete en el destino</h4><p>Consulta transporte público, taxis autorizados y movilidad local.</p><div class="provider-links"><a class="btn sm outline" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent('transporte público en '+destination+', México')}" target="_blank" rel="noopener noreferrer">Buscar opciones locales ↗</a></div></div></article></div><div class="callout orange">No mostramos horarios, precios ni asientos como si fueran datos en vivo. La disponibilidad se consulta en el sitio del proveedor.</div>`;
  }
- return header('DESCUBRE · COMPARA · ELIGE','Explora México','Lugares, hospedaje y transporte antes o después de crear un viaje.',`<button class="btn primary" data-action="newtrip">+ Crear viaje</button>`)+`<section class="section">${selector}${tabHtml}<div class="explore-panel">${panel}</div></section>`;
+ return header('DESCUBRE · COMPARA · ELIGE','Explora México','Lugares, hospedaje y transporte antes o después de crear un viaje.',`<button class="btn primary" data-action="newtrip">+ Crear viaje</button>`)+`<section class="section">${expShortcut}${selector}${tabHtml}<div class="explore-panel">${panel}</div></section>`;
 }
+/* TravelPlanner Flex 2.2 — Explorar por actividad (Pescar en Veracruz). */
+const experienceById=id=>state.experiences.find(x=>x.id===id);
+const experienceMaps=e=>'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent('pesca recreativa '+e.zona+', Veracruz, México');
+const experienceGuides=e=>'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent('guías pesca deportiva '+e.zona+', Veracruz, México');
+const experiencePlacePhoto=(e,cls='experience-image')=>{
+ const p=e.fotos?.[0];
+ return `<div class="experience-cover"><img loading="lazy" class="${cls}" src="${esc(p?.imagen||'/static/img/photo-placeholder.svg')}" alt="Vista del entorno de ${esc(e.zona)}" onerror="this.onerror=null;this.closest('.experience-cover')?.classList.add('no-photo');this.hidden=true"><div class="experience-photo-backup"><span>🎣</span><strong>${esc(e.zona)}</strong><a href="${esc(p?.fuente||experienceMaps(e))}" target="_blank" rel="noopener noreferrer">Ver foto original ↗</a></div><div class="experience-cover-caption">Fotografía del entorno · no de una salida contratada</div></div>`;
+};
+function experiences(){
+ const all=state.experiences.filter(x=>x.estado===state.experienceRegion && x.actividad===state.experienceMode);
+ const zones=['Todas',...new Set(all.map(e=>e.zona))];
+ const types=['Todas',...new Set(all.map(e=>e.modalidad))];
+ const filtered=all.filter(e=>(state.experienceZone==='Todas'||e.zona===state.experienceZone)&&
+    (state.experienceType==='Todas'||e.modalidad===state.experienceType)&&
+    (state.experienceLevel==='Todos'||e.nivel===state.experienceLevel));
+ const typesUi=['🎣 Pescar','🥾 Senderismo','🤿 Bucear','🚣 Kayak','🏕️ Acampar'];
+ return header('ELIGE LO QUE QUIERES HACER','Explora por actividad',
+    'No necesitas conocer el destino. Elige una actividad y te mostramos zonas para planearla.')+
+ `<section class="section"><div class="experience-intro"><div><span class="eyebrow">EXPERIENCIAS QUE SE ADAPTAN A TI</span>
+ <h3>¿Qué quieres hacer?</h3><p>Empieza con la pesca recreativa en Veracruz. Más experiencias se incorporarán de manera progresiva.</p></div>
+ <div class="experience-activity-list">${typesUi.map((a,i)=>`<button type="button" class="experience-activity-option ${i===0?'chosen':''}" ${i===0?'aria-pressed="true"':''} data-action="experience-activity" data-type="${i===0?'Pescar':esc(a)}">${a}${i===0?'<small>Disponible</small>':'<small>Próximamente</small>'}</button>`).join('')}</div></div>
+ <div class="experience-controls card"><div class="field"><label for="experience-region">Región</label><select id="experience-region"><option value="Veracruz" selected>Veracruz</option></select></div>
+ <div class="field"><label for="experience-zone">Zona</label><select id="experience-zone">${zones.map(z=>`<option value="${esc(z)}" ${state.experienceZone===z?'selected':''}>${esc(z)}</option>`).join('')}</select></div>
+ <div class="field"><label for="experience-type">Modalidad</label><select id="experience-type">${types.map(t=>`<option value="${esc(t)}" ${state.experienceType===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
+ <div class="field"><label for="experience-level">Nivel orientativo</label><select id="experience-level">${['Todos','Principiante','Intermedio'].map(t=>`<option value="${t}" ${state.experienceLevel===t?'selected':''}>${t}</option>`).join('')}</select></div>
+ <button type="button" class="btn outline" data-action="experience-reset">Limpiar filtros</button></div>
+ <div class="experience-subheading"><div><h3>🎣 Pescar en Veracruz</h3><p>${filtered.length} zonas de referencia para consultar excursiones y guías</p></div><a href="https://www.gob.mx/conapesca/es/documentos/conapesca-01-016-pesca-deportivo-recreativa" target="_blank" rel="noopener noreferrer">Permisos y reglas oficiales ↗</a></div>
+ <div class="experience-grid">${filtered.map(e=>`<article class="experience-card">${experiencePlacePhoto(e)}<div class="experience-card-body"><div class="experience-tags"><span>${esc(e.modalidad)}</span><span>${esc(e.nivel)}</span></div><h4>${esc(e.nombre)}</h4><p>${esc(e.descripcion)}</p><div class="experience-metadata">📍 ${esc(e.zona)} · ⏱ ${e.duracion_min} min sugeridos para agenda</div><div class="experience-price">Precio: consultar al operador</div><div class="experience-buttons"><button class="btn sm primary" data-action="experience-detail" data-id="${esc(e.id)}">Detalles y guías</button><button class="btn sm outline" data-action="experience-add" data-id="${esc(e.id)}">+ Mi viaje</button></div></div></article>`).join('')||'<div class="empty">No hay zonas con esta combinación. Prueba limpiar filtros.</div>'}</div>
+ <div class="callout orange experience-advice"><strong>Antes de salir:</strong> las fotografías son del entorno, no de operadores. Estos resultados no confirman permisos, capturas, precios ni disponibilidad; revisa la normativa, el clima y las condiciones de seguridad con un guía autorizado.</div></section>`;
+}
+function experienceDetailHTML(e){
+ const photos=e.fotos||[],idx=((state.experiencePhotoIndex%photos.length)+photos.length)%photos.length,p=photos[idx];
+ const gallery=`<div class="experience-detail-gallery"><div class="experience-photo-frame"><img src="${esc(p?.imagen||'/static/img/photo-placeholder.svg')}" alt="Vista ${idx+1} del entorno de ${esc(e.zona)}" onerror="this.onerror=null;this.closest('.experience-photo-frame')?.classList.add('no-photo');this.hidden=true"><div class="experience-photo-backup"><span>🎣</span><strong>${esc(e.zona)}</strong><a href="${esc(p?.fuente||experienceMaps(e))}" target="_blank" rel="noopener noreferrer">Abrir fotografía original ↗</a></div>
+ ${photos.length>1?`<button class="experience-arrow prev" aria-label="Foto anterior" data-action="experience-prev">‹</button><button class="experience-arrow next" aria-label="Siguiente fotografía" data-action="experience-next">›</button>`:''}
+ <span class="experience-photo-count">${idx+1} / ${photos.length}</span></div>
+ <div class="experience-photo-footer"><span>Foto del entorno · ${esc(p?.credito||'Wikimedia Commons')} · ${esc(p?.licencia||'')}</span><a href="${esc(p?.fuente||'https://commons.wikimedia.org')}" target="_blank" rel="noopener noreferrer">Fuente y licencia ↗</a></div>
+ ${photos.length>1?`<div class="experience-photo-dots">${photos.map((_,i)=>`<button aria-label="Ver foto ${i+1}" class="${i===idx?'active':''}" data-action="experience-dot" data-index="${i}"></button>`).join('')}</div>`:''}</div>`;
+ const ops=e.operadores||[];
+ const cards=ops.length?ops.map(op=>`<div class="experience-operator"><div><h4>${esc(op.nombre)}</h4><p>${esc(op.tipo)}</p><p>${esc(op.descripcion)}</p><small>${esc(op.vigencia)}</small></div><div class="experience-operator-actions">${op.telefono?`<a class="btn sm outline" href="tel:+52${esc(op.telefono)}">Llamar ↗</a>`:''}<a class="btn sm soft" href="${esc(op.fuente)}" target="_blank" rel="noopener noreferrer">Ver fuente ↗</a></div></div>`).join(''):'<p class="small muted">No tenemos todavía un operador específico verificado para esta zona. Puedes consultar el directorio o buscar guías locales; confirma que estén activos y autorizados.</p>';
+ return `${gallery}<div class="experience-detail-content"><div class="experience-tags"><span>${esc(e.modalidad)}</span><span>${esc(e.nivel)}</span></div><p>${esc(e.descripcion)}</p><p><strong>Duración sugerida para agendar:</strong> ${e.duracion_min} minutos. No es la duración de un paquete ofertado.</p>
+ <p><strong>Qué debes confirmar:</strong> ${esc(e.equipo)}</p><p><strong>Antes de ir:</strong> ${esc(e.nota)}</p>
+ <h3>Operadores y consultas</h3>${cards}<div class="experience-links"><a class="btn primary" href="${experienceGuides(e)}" target="_blank" rel="noopener noreferrer">Buscar guías en Maps ↗</a><a class="btn outline" href="${experienceMaps(e)}" target="_blank" rel="noopener noreferrer">Ver zona ↗</a><a class="btn soft" href="https://www.gob.mx/conapesca/documentos/prestadores-de-servicios?state=published" target="_blank" rel="noopener noreferrer">Directorio CONAPESCA ↗</a><a class="btn soft" href="https://www.gob.mx/conapesca/es/documentos/conapesca-01-016-pesca-deportivo-recreativa" target="_blank" rel="noopener noreferrer">Permisos y reglas ↗</a></div>
+ <div class="experience-bottom"><strong>Costo: por cotizar · Sin reservación automática</strong><button class="btn primary" data-action="experience-add" data-id="${esc(e.id)}">+ Agregar a mi viaje</button></div></div>`;
+}
+function openExperienceDetails(id){const e=experienceById(id);if(!e){toast('No se encontró la experiencia.',true);return;}state.experienceDetail=e;state.experiencePhotoIndex=0;showModal(e.nombre,experienceDetailHTML(e),true);}
+function updateExperienceGallery(){if(!state.experienceDetail)return;const m=$('#modal-root .modal');if(!m)return;const heading=m.querySelector('.modal-head')?.outerHTML||'';
+ // Replace only the gallery, preserving the rest of the modal's interactive content.
+ const tmp=document.createElement('div');tmp.innerHTML=experienceDetailHTML(state.experienceDetail);const replacement=tmp.querySelector('.experience-detail-gallery');const old=m.querySelector('.experience-detail-gallery');if(old&&replacement)old.replaceWith(replacement);
+}
+function openExperienceAdd(id){
+ const e=experienceById(id);if(!e){toast('Experiencia no encontrada.',true);return;}
+ const options=state.trips.filter(t=>t.destino==='Veracruz');
+ if(!options.length){closeModal();state.pendingPlaceId=e.lugar_id;openForm('viaje',null,{destino:'Veracruz',nombre:'Mi viaje de pesca'});toast('Crea un viaje a Veracruz y agregaremos la experiencia al primer día.');return;}
+ const chosen=options.find(t=>t.id_viaje===state.tripId)||options[0];
+ state.experienceDetail=e;
+ showModal('Agrega a tu itinerario',`<p class="modal-sub">${esc(e.nombre)} · El costo todavía no está confirmado. Podrás editarlo cuando cotices con el operador.</p>
+ <form id="experience-plan-form" data-id="${esc(id)}"><div class="form-grid"><div class="field full"><label for="experience-trip">Viaje a Veracruz *</label><select id="experience-trip" required>${options.map(t=>`<option value="${t.id_viaje}" ${chosen.id_viaje===t.id_viaje?'selected':''}>${esc(t.nombre)} (${dateES(t.fecha_inicio)} – ${dateES(t.fecha_fin)})</option>`).join('')}</select></div><div class="field"><label for="experience-date">Fecha *</label><input id="experience-date" type="date" required min="${esc(chosen.fecha_inicio)}" max="${esc(chosen.fecha_fin)}" value="${esc(chosen.fecha_inicio)}"></div><div class="field"><label for="experience-time">Hora prevista *</label><input id="experience-time" type="time" required value="08:00"></div></div><div class="form-actions"><button type="button" class="btn outline" data-action="close">Cancelar</button><button type="submit" class="btn primary">Guardar en itinerario →</button></div></form>`,true);
+}
+
 function agenda(){if(!trip())return header('ITINERARIO','Organiza tus días','')+empty();let d=state.detail,days=d.dias;return header('PLANEA SIN CHOQUES','Itinerario de '+esc(d.viaje.destino),'Selecciona un día, agrega lugares y usa Plan B cuando cambien las cosas.',`<div class="btn-group"><button class="btn primary" data-action="add-day">+ Agregar día</button><button class="btn outline" data-action="auto-route">◈ Ruta sugerida</button><button class="btn outline" data-action="weather">☂ Pronóstico</button></div>`)+
  `<section class="section"><div class="callout"><strong>¿Cambio de planes?</strong> En cualquier actividad pulsa «Plan B» y elige «Lluvia», «Cancelación» o «Presupuesto». La app mostrará alternativas y su diferencia de costo estimado.</div>
  ${days.length?days.map(d=>`<article class="card day-card"><div class="day-head"><div><div class="day-date">${dateES(d.fecha)}</div><h3>${esc(d.titulo||'Mi día')}</h3><p class="muted tiny" style="margin:6px 0">${esc(d.descripcion||'Organiza tus experiencias')}</p></div><div class="btn-group"><button class="btn sm outline" data-action="edit-day" data-id="${d.id_itinerario}">Editar</button><button class="btn sm primary" data-action="add-activity" data-id="${d.id_itinerario}">+ Actividad</button><button class="btn sm warn" data-action="delete-item" data-table="itinerario" data-id="${d.id_itinerario}">Eliminar</button></div></div>
@@ -154,7 +214,7 @@ function group(){if(!trip())return header('PLAN EN EQUIPO','Viajes en grupo','')
  <section class="section"><h3>Reparto de gastos compartidos</h3><p class="tagline">Cálculo igualitario para gastos marcados como compartidos y con pagador registrado.</p><div class="card card-pad" style="margin-top:12px">${Object.entries(d.reparto).map(([n,v])=>`<div class="row between" style="padding:9px 0;border-bottom:1px solid var(--line)"><div><strong>${esc(n)}</strong><p class="muted tiny" style="margin:5px 0">Pagó ${money(v.pagado)} · Parte ${money(v.parte)}</p></div>${tag((v.saldo>=0?'A favor ':'Por pagar ')+money(Math.abs(v.saldo)),v.saldo<0?'ochre':'')}</div>`).join('')||'<p>Agrega viajeros para empezar.</p>'}</div></section>`}
 function settings(){return header('INFORMACIÓN Y CONTROL','Configuración','Administra tus datos y consulta las fuentes de las fotografías.')+
  `<section class="section"><div class="grid grid-2"><div class="card card-pad"><h3>Exportar mis datos</h3><p class="tagline">Descarga viajes, reservaciones, itinerarios, presupuestos, gastos y preferencias en formato JSON.</p><br><button class="btn primary" data-action="export">↓ Descargar respaldo</button></div><div class="card card-pad"><h3>Tu cuenta</h3><p class="tagline">Tus viajes se guardan en la base de datos de tu cuenta y se comparten entre tus dispositivos al iniciar sesión.</p><br><button class="btn outline" data-action="logout">Cerrar sesión</button></div></div></section><section class="section callout orange"><strong>Alcance real:</strong> TravelPlanner no vende boletos ni confirma reservaciones. Los precios y tiempos son estimaciones; verifica horarios, tarifas y disponibilidad con los recintos. Plan B sugiere alternativas del catálogo y requiere que confirmes el cambio.</section><section class="section"><h3>Qué incluye la aplicación</h3><div class="special-flow"><span>Cuenta por usuario</span><span>Base de datos compartida</span><span>32 entidades · lugares destacados</span><span>Créditos y licencias</span><span>Detección de horarios</span><span>Plan B</span><span>Vista móvil y PC</span><span>Exportación JSON</span></div></section>`}
-function renderDock(){let el=$('#dock'),d=state.draft,t=trip();if(!d&&['explorar','ajustes'].includes(state.tab)){el.classList.add('hidden');el.innerHTML='';return}if(d){el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Tu viaje se está formando</div><div class="bar-data">${d.destino?`<span>📍 ${esc(d.destino)}</span>`:''}${d.fecha_inicio?`<span>📅 ${dateES(d.fecha_inicio)}</span>`:''}${d.presupuesto?`<span>💰 ${money(d.presupuesto)}</span>`:''}</div></div><div class="dock-right"><strong>Revisa y guarda</strong><button class="btn primary sm" data-action="submit-trip-draft">Guardar viaje →</button></div>`;return}
+function renderDock(){let el=$('#dock'),d=state.draft,t=trip();if(!d&&['explorar','experiencias','ajustes'].includes(state.tab)){el.classList.add('hidden');el.innerHTML='';return}if(d){el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Tu viaje se está formando</div><div class="bar-data">${d.destino?`<span>📍 ${esc(d.destino)}</span>`:''}${d.fecha_inicio?`<span>📅 ${dateES(d.fecha_inicio)}</span>`:''}${d.presupuesto?`<span>💰 ${money(d.presupuesto)}</span>`:''}</div></div><div class="dock-right"><strong>Revisa y guarda</strong><button class="btn primary sm" data-action="submit-trip-draft">Guardar viaje →</button></div>`;return}
  if(!t){el.classList.add('hidden');return}let b=state.detail.presupuesto;el.classList.remove('hidden');el.innerHTML=`<div class="dock-main"><div class="dock-title">✈ Mi viaje: ${esc(t.destino)}</div><div class="bar-data"><span>📅 ${dateES(t.fecha_inicio)}</span><span>💰 Presupuesto ${money(b.presupuesto.monto_total)}</span><span>📊 Gastado ${money(b.gasto_real)}</span><span>🗓 ${state.detail.dias.reduce((acc,v)=>acc+v.actividades.length,0)} actividades</span></div></div><div class="dock-right"><strong style="color:${b.saldo<0?'#c65345':'#138278'}">Saldo ${money(b.saldo)}</strong><button class="btn primary sm" data-nav="agenda">Ver plan →</button></div>`}
 function galleryBody(){
  const g=state.gallery; if(!g)return '';
@@ -278,6 +338,17 @@ async function updatePlanB(){let mot=$('#planb-reason')?.value||'lluvia';try{let
  }catch(e){fail(e)}}
 async function chooseAction(action,el){let id=el.dataset.id,tab=el.dataset.nav;try{
  if(tab){go(tab);return}
+ if(action==='experience-activity'){if(el.dataset.type!=='Pescar'){toast('Esta actividad se agregará en una siguiente actualización.');return}state.experienceMode='Pescar';render();return}
+ if(action==='experience-reset'){state.experienceZone='Todas';state.experienceType='Todas';state.experienceLevel='Todos';render();return}
+ if(action==='experience-detail'){openExperienceDetails(id);return}
+ if(action==='experience-add'){openExperienceAdd(id);return}
+ if(action==='experience-prev' || action==='experience-next' || action==='experience-dot'){
+   const photos=state.experienceDetail?.fotos||[];if(!photos.length)return;
+   if(action==='experience-prev')state.experiencePhotoIndex=(state.experiencePhotoIndex-1+photos.length)%photos.length;
+   if(action==='experience-next')state.experiencePhotoIndex=(state.experiencePhotoIndex+1)%photos.length;
+   if(action==='experience-dot')state.experiencePhotoIndex=Number(el.dataset.index)||0;
+   updateExperienceGallery();return;
+ }
  if(action==='newtrip'){openForm('viaje');return}
  if(action==='choose-trip'){await loadTrips(Number(id));go('inicio');return}
  if(action==='edit-trip'){openForm('viaje',Number(id));return}
@@ -374,6 +445,14 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-action],[d
 document.addEventListener('change',async e=>{
  if(e.target.id==='trip-select'){try{await loadTrips(Number(e.target.value));render()}catch(err){fail(err)}}
  if(e.target.id==='city-filter'){state.exploreDestination=e.target.value;state.city=e.target.value;state.filter='Todos';state.catalogSearch='';render();}
+ if(e.target.id==='experience-zone'){state.experienceZone=e.target.value;render()}
+ if(e.target.id==='experience-type'){state.experienceType=e.target.value;render()}
+ if(e.target.id==='experience-level'){state.experienceLevel=e.target.value;render()}
+ if(e.target.id==='experience-region'){state.experienceRegion=e.target.value;state.experienceZone='Todas';render()}
+ if(e.target.id==='experience-trip'){
+   const t=state.trips.find(x=>x.id_viaje===Number(e.target.value));
+   if(t){const inp=$('#experience-date');if(inp){inp.min=t.fecha_inicio;inp.max=t.fecha_fin;inp.value=t.fecha_inicio}}
+ }
  if(e.target.id==='voter'){state.voter=Number(e.target.value)}
 });
 document.addEventListener('input',e=>{
@@ -395,6 +474,20 @@ document.addEventListener('submit',async e=>{
    try{const res=await api('/api/register',{method:'POST',body:{nombre:$('#reg-name').value,email:$('#reg-email').value,password:$('#reg-password').value}});state.csrf=res.csrf;await authDone();toast('Tu cuenta está lista. ¡Comencemos a planear!');}
    catch(err){fail(err)}return
  }
+ if(e.target.id==='experience-plan-form'){
+   e.preventDefault();
+   const form=e.target;const btn=form.querySelector('[type="submit"]');btn.disabled=true;
+   try{
+     const tid=Number($('#experience-trip').value),date=$('#experience-date').value,time=$('#experience-time').value;
+     const experience=experienceById(form.dataset.id);
+     const t=state.trips.find(x=>x.id_viaje===tid);
+     if(!experience||!t)throw Error('No se encontró el viaje o la experiencia.');
+     if(date<t.fecha_inicio || date>t.fecha_fin)throw Error('La fecha debe estar dentro del viaje.');
+     await api(`/api/viajes/${tid}/lugares`,{method:'POST',body:{id_lugar:experience.lugar_id,fecha:date,hora_inicio:time}});
+     closeModal();await loadTrips(tid);go('agenda');toast('Experiencia añadida. Consulta al operador antes de reservar.');
+   }catch(err){fail(err);btn.disabled=false}
+   return;
+ }
  if(e.target.id==='editor-form'){e.preventDefault();const btn=e.target.querySelector('[type="submit"]');btn.disabled=true;try{await submitForm(e.target)}catch(err){fail(err);btn.disabled=false}}
 });
 $('#show-register').addEventListener('click',()=>{$('#login-form').classList.add('hidden');$('#register-form').classList.remove('hidden')});
@@ -403,5 +496,11 @@ $('#account-btn').addEventListener('click',()=>chooseAction('logout',document.cr
 let galleryTouchX=null;
 document.addEventListener('touchstart',e=>{if(e.target.closest('.gallery-frame'))galleryTouchX=e.changedTouches[0]?.screenX??null},{passive:true});
 document.addEventListener('touchend',e=>{if(galleryTouchX===null||!state.gallery)return;const dx=(e.changedTouches[0]?.screenX??galleryTouchX)-galleryTouchX;galleryTouchX=null;if(Math.abs(dx)>45){const c=state.gallery.fotos?.length||0;if(c>1){state.gallery.index=(state.gallery.index+(dx<0?1:-1)+c)%c;renderGallery()}}},{passive:true});
+let expTouchX=null;
+document.addEventListener('touchstart',e=>{if(e.target.closest('.experience-photo-frame'))expTouchX=e.changedTouches[0]?.screenX??null},{passive:true});
+document.addEventListener('touchend',e=>{if(expTouchX===null || !state.experienceDetail)return;
+ const dx=(e.changedTouches[0]?.screenX??expTouchX)-expTouchX;expTouchX=null;
+ if(Math.abs(dx)>45){const c=state.experienceDetail.fotos?.length||0;if(c>1){state.experiencePhotoIndex=(state.experiencePhotoIndex+(dx<0?1:-1)+c)%c;updateExperienceGallery()}}
+},{passive:true});
 window.addEventListener('keydown',e=>{if(e.key==='Escape' && $('#modal-root').firstChild)closeModal()});
 init();
