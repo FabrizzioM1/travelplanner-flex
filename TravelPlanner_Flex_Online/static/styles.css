@@ -282,3 +282,8 @@ body{background:#f5f8f8}
 .v34-member-row strong{font-size:14px;overflow-wrap:anywhere}
 .v34-member-row button{flex-shrink:0}
 @media(max-width:560px){.v3-trip-heading{align-items:flex-start;flex-wrap:wrap}.v34-trip-buttons{width:100%}.v34-trip-buttons .btn{flex:1}.v34-member-row{gap:7px}}
+
+/* TravelPlanner 3.3.2 — acción destructiva discreta dentro de Mis viajes. */
+.v342-delete-trip{display:inline-flex;align-items:center;justify-content:center;padding:9px 10px;border:1px solid transparent;border-radius:10px;background:transparent;color:#9c4b49;font-size:12px;font-weight:650;cursor:pointer;line-height:1.3}
+.v342-delete-trip:hover{background:#fff1ef;border-color:#f2d3cd;color:#8b302c}
+.v342-delete-trip:focus-visible{outline:3px solid #c95e55;outline-offset:2px}
