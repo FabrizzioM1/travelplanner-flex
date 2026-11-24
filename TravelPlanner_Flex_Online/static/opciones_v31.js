@@ -4,7 +4,7 @@
 'use strict';
 const TP31 = (() => {
  const GEO = {"Aguascalientes": [21.8853, -102.2916], "Baja California": [32.5149, -117.0382], "Baja California Sur": [22.8905, -109.9167], "Campeche": [19.8301, -90.5349], "Chiapas": [16.7516, -93.1029], "Chihuahua": [28.6353, -106.0889], "Ciudad de México": [19.4326, -99.1332], "Coahuila": [25.4383, -100.9737], "Colima": [19.2452, -103.7241], "Durango": [24.0277, -104.6532], "Estado de México": [19.257, -99.6557], "Guanajuato": [21.019, -101.2574], "Guerrero": [16.8531, -99.8237], "Hidalgo": [20.1011, -98.7591], "Jalisco": [20.6597, -103.3496], "Michoacán": [19.7008, -101.1844], "Morelos": [18.9242, -99.2216], "Nayarit": [21.5042, -104.8946], "Nuevo León": [25.6866, -100.3161], "Oaxaca": [17.0654, -96.7237], "Puebla": [19.0414, -98.2063], "Querétaro": [20.5888, -100.3899], "Quintana Roo": [21.1619, -86.8515], "San Luis Potosí": [22.1565, -100.9855], "Sinaloa": [23.2494, -106.4111], "Sonora": [29.0729, -110.9559], "Tabasco": [17.9895, -92.9475], "Tamaulipas": [23.7369, -99.1411], "Tlaxcala": [19.3139, -98.2404], "Veracruz": [19.1738, -96.1342], "Yucatán": [20.9674, -89.5926], "Zacatecas": [22.7709, -102.5832]};
- const status = {mode:'', options:[], date:'', old:null, kind:'', origin:'', search:'', replaceId:null};
+ const status = {mode:'', options:[], date:'', old:null, kind:'', origin:'', originTripId:null, lastTicketType:'', search:'', replaceId:null};
  const m=n=>money(n);
  const safe=s=>esc(s);
  const midpoint=(lo,hi)=>Math.round(((Number(lo)+Number(hi))/2)/10)*10;
@@ -26,26 +26,68 @@ const TP31 = (() => {
   showModal('¿Qué quieres añadir al día '+(state.dayIndex+1)+'?', `<p class="modal-sub">Primero compara opciones y rangos. Después elige una para calcularla en tu viaje.</p><div class="v3-menu-grid">${groups.map(([kind,ico,title,desc])=>`<button data-action="v31-menu" data-kind="${kind}">${ico}<strong>${safe(title)}</strong><small>${safe(desc)}</small></button>`).join('')}</div>`,true);
  }
  function routeDistance(a,b){const c=GEO[a],d=GEO[b];if(!c||!d)return null;const toRad=x=>x*Math.PI/180;const h=Math.sin(toRad((d[0]-c[0])/2))**2+Math.cos(toRad(c[0]))*Math.cos(toRad(d[0]))*Math.sin(toRad((d[1]-c[1])/2))**2;return Math.round(6371*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h)));}
- function ticketOptions(origin){
-  const destination=t().destino,dist=routeDistance(origin,destination);
+ // El estado de residencia se guarda en las notas del boleto (sin crear tablas nuevas).
+ // Permite recuperar el regreso incluso después de cerrar sesión o cambiar de equipo.
+ function homeOriginFromTickets(type){
+  const all=days().flatMap(d=>d.conceptos||[]);
+  const primary=type==='boleto_regreso'?'boleto_regreso':'boleto_ida';
+  const secondary=primary==='boleto_ida'?'boleto_regreso':'boleto_ida';
+  const routes=[...all.filter(c=>c.tipo===primary),...all.filter(c=>c.tipo===secondary)];
+  for(const item of routes){
+   const note=String(item.nota||'');
+   const match=note.match(/(?:Estado de origen habitual|Origen habitual|Origen):\s*([^;\n]+)/i);
+   if(match){
+    const home=match[1].trim();
+    if(Object.prototype.hasOwnProperty.call(GEO,home))return home;
+   }
+  }
+  return '';
+ }
+ function travelLeg(type,home){
+  const destination=t()?.destino||'';
+  return type==='boleto_regreso' ? {from:destination,to:home} : {from:home,to:destination};
+ }
+ function ticketOptions(origin,type=status.kind){
+  const destination=t().destino;
+  const dist=routeDistance(origin,destination);
   if(dist===null)return [];
-  // Estimador de planificación con gran margen, no kilómetros reales por carretera ni tarifas de operadores.
+  const {from,to}=travelLeg(type,origin);
+  const sameState=from===to;
+  // Estimación con centros estatales, NO tarifa publicada ni distancia real por carretera.
   const km=Math.max(85,dist*1.35);
   const bus=Math.min(3200,Math.max(190,Math.round((140+km*.72)/50)*50));
   const flight=Math.min(8500,Math.max(950,Math.round((780+dist*.95)/50)*50));
+  const route=`${from} → ${to}`;
+  const context=sameState?'Mismo estado: indica las ciudades o municipios exactos; el importe es solo una referencia genérica.':`Distancia geográfica entre referencias estatales: ${dist} km (no es la distancia real de la ruta).`;
   return [
-   {name:'Autobús económico',desc:`${origin} → ${destination}. Distancia geográfica aprox. ${dist} km; ruta, terminal y horarios por confirmar.`,lo:Math.round(bus*.72/10)*10,hi:Math.round(bus*1.35/10)*10,unit:'por boleto · estimado',icon:'🚌',url:'https://www.ado.com.mx/'},
-   {name:'Autobús ejecutivo',desc:'Asientos y comodidad superiores cuando exista servicio en la ruta.',lo:Math.round(bus*1.3/10)*10,hi:Math.round(bus*2/10)*10,unit:'por boleto · estimado',icon:'🚍',url:'https://etn.com.mx/'},
-   {name:'Vuelo básico',desc:'No presupone ruta directa. Verificar TUA, equipaje, conexiones y traslado al aeropuerto.',lo:Math.round(flight*.7/10)*10,hi:Math.round(flight*1.75/10)*10,unit:'por boleto · estimado',icon:'✈',url:'https://www.google.com/travel/flights'},
-   {name:'Vuelo con equipaje',desc:'Referencia con margen adicional para equipaje y selección; no es tarifa oficial.',lo:Math.round(flight*1.15/10)*10,hi:Math.round(flight*2.2/10)*10,unit:'por boleto · estimado',icon:'🧳',url:'https://www.google.com/travel/flights'}
+   {name:'Autobús económico',desc:`${route}. ${context} Verifica terminales, ruta y horarios.`,lo:Math.round(bus*.72/10)*10,hi:Math.round(bus*1.35/10)*10,unit:'por boleto · estimado',icon:'🚌',url:'https://www.ado.com.mx/'},
+   {name:'Autobús ejecutivo',desc:`${route}. ${context} Servicio y disponibilidad sujetos a la ruta.`,lo:Math.round(bus*1.3/10)*10,hi:Math.round(bus*2/10)*10,unit:'por boleto · estimado',icon:'🚍',url:'https://etn.com.mx/'},
+   {name:'Vuelo básico',desc:`${route}. ${context} No se presupone vuelo directo; verificar TUA, equipaje, conexiones y aeropuertos.`,lo:Math.round(flight*.7/10)*10,hi:Math.round(flight*1.75/10)*10,unit:'por boleto · estimado',icon:'✈',url:'https://www.google.com/travel/flights'},
+   {name:'Vuelo con equipaje',desc:`${route}. ${context} Verifica ruta real, equipaje, TUA e impuestos.`,lo:Math.round(flight*1.15/10)*10,hi:Math.round(flight*2.2/10)*10,unit:'por boleto · estimado',icon:'🧳',url:'https://www.google.com/travel/flights'}
   ];
  }
  function ticket(type){
   status.kind=type;status.old=null;
-  const origin=status.origin;
-  const options='<option value="">Selecciona el estado desde donde sales</option>'+Object.keys(GEO).map(g=>`<option value="${safe(g)}" ${g===origin?'selected':''}>${safe(g)}</option>`).join('');
-  showModal(type==='boleto_ida'?'Comparar boletos de ida':'Comparar boletos de regreso',`<p class="modal-sub">Tu destino: <b>${safe(t().destino)}</b>. Primero dinos desde dónde sales. Los rangos dependen de una distancia aproximada.</p><label class="v31-field-label">Estado de origen habitual</label><select id="v31-origin">${options}</select><div id="v31-route-options">${origin?`<div class="v31-options">${ticketOptions(origin).map((o,i)=>card({...o,idx:i})).join('')}</div>`:'<div class="v3-muted-box">Selecciona el origen para comparar opciones.</div>'}</div>${subtitle}`,true);
-  status.mode='ticket';status.options=ticketOptions(origin).map((o,i)=>({...o,idx:i}));
+  if(status.originTripId!==state.tripId||status.lastTicketType!==type){
+   // No reutilizar orígenes entre viajes ni suponer que ida y regreso
+   // terminan siempre en el mismo lugar (trayectos abiertos).
+   status.originTripId=state.tripId;
+   status.lastTicketType=type;
+   status.origin=homeOriginFromTickets(type);
+  }
+  const home=status.origin;
+  const route=travelLeg(type,home);
+  const isReturn=type==='boleto_regreso';
+  const label=isReturn?'¿A qué estado regresas?':'¿Desde qué estado sales?';
+  const placeholder=isReturn?'Selecciona el estado al que regresas':'Selecciona el estado desde donde sales';
+  const options=`<option value="">${placeholder}</option>`+Object.keys(GEO).map(g=>`<option value="${safe(g)}" ${g===home?'selected':''}>${safe(g)}</option>`).join('');
+  const explanation=isReturn
+   ?'Los boletos de regreso salen del destino de tu viaje y vuelven a la ciudad o estado que indiques. Si ya capturaste la ida, sugerimos automáticamente su origen; puedes cambiarlo.'
+   :'Los boletos de ida salen del lugar donde vives o iniciarás el recorrido y llegan a tu destino turístico.';
+  const routeText=home?`<div class="v31-picked"><strong>Trayecto ${isReturn?'de regreso':'de ida'}: ${safe(route.from)} → ${safe(route.to)}</strong><span>Los importes son referencias entre estados; confirma ciudades, terminales y aeropuertos exactos antes de comprar.</span></div>`:
+   `<div class="v3-muted-box">${isReturn?'Salida: '+safe(t().destino)+' → Destino de regreso: por elegir.':'Origen de ida: por elegir → Destino: '+safe(t().destino)+'.'}</div>`;
+  showModal(isReturn?'Comparar boletos de regreso':'Comparar boletos de ida',`<p class="modal-sub">${explanation}</p><label class="v31-field-label" for="v31-origin">${label}</label><select id="v31-origin">${options}</select>${routeText}<div id="v31-route-options">${home?`<div class="v31-options">${ticketOptions(home,type).map((o,i)=>card({...o,idx:i})).join('')}</div>`:'<div class="v3-muted-box">Elige tu estado para comparar opciones.</div>'}</div>${subtitle}`,true);
+  status.mode='ticket';status.options=ticketOptions(home,type).map((o,i)=>({...o,idx:i}));
  }
  function transport(type){
   status.kind=type;status.old=null;
@@ -126,8 +168,12 @@ const TP31 = (() => {
   const persons=isMeal||isTicket||isActivity?n():1;
   const label=isHotel?'Habitaciones × noches':isRent?'Días de renta':isTicket?'Boletos por viajero':'Cantidad de servicios';
   const old=status.old;
-  const dateInput=isMeal?`<input type="hidden" name="fecha" value="${safe(old.fecha)}"><p class="v31-locked-date">${dateES(old.fecha)} · para cambiar de día, edita la comida correspondiente de ese día.</p>`:selectDay(v3Day()?.fecha);
-  showModal('Presupuestar · '+o.name,`<div class="v31-picked"><strong>${safe(o.name)}</strong><span>Rango de referencia: ${m(o.lo)} a ${m(o.hi)} ${safe(o.unit||'')}</span>${o.url?`<a href="${safe(o.url)}" target="_blank" rel="noopener noreferrer">Consultar precios o ubicación ↗</a>`:''}</div><form id="v31-option-form"><div class="form-grid"><div class="field full"><label>Nombre o descripción</label><input name="nombre" maxlength="140" required value="${safe(isMeal?(status.kind==='desayuno'?'Desayuno':status.kind==='cena'?'Cena':'Comida')+' · '+o.name:o.name)}"></div><div class="field"><label>Día del itinerario</label>${dateInput}</div><div class="field"><label>Hora (opcional)</label><input name="hora" type="time" value="${isMeal?(status.kind==='desayuno'?'08:30':status.kind==='cena'?'20:00':'14:30'):'10:00'}"></div><div class="field"><label>Precio ${isHotel?'por habitación/noche':isRent?'por día':isTicket?'por boleto':isMeal||isActivity?'por persona':'por servicio'} (MXN)</label><input name="precio_unitario" type="number" min="0" max="1000000" step="0.01" value="${unit}" required></div><div class="field"><label>${label}</label><input name="cantidad" type="number" min="1" max="365" step="1" value="${q}" required></div><div class="field"><label>${isHotel?'Habitaciones calculadas según viajeros':'Personas que consumen o pagan esta unidad'}</label><input name="personas" type="number" min="1" max="${n()}" step="1" value="${persons}" ${isHotel?'readonly':''} required></div><div class="field"><label>¿Está incluido en otro pago?</label><select name="incluido"><option value="0">No, contar el costo</option><option value="1">Sí, costo adicional $0</option></select></div><div class="field full"><label>Nota</label><textarea name="nota" maxlength="350">Rango orientativo: ${o.lo}–${o.hi} MXN. ${isHotel?'Capacidad estimada de 2 personas por habitación; verificar con alojamiento.':isTicket?'Origen: '+status.origin+'; ruta y disponibilidad por confirmar.':'Confirmar precio real antes del viaje.'}</textarea></div></div><div class="v31-live-total">Costo previsto para tu viaje: <strong id="v31-total">${m(unit*q*persons)}</strong></div>${subtitle}<div class="form-actions">${homeButton}<button class="btn primary" type="submit">${isMeal?'Actualizar esta comida':'Añadir al presupuesto'} →</button></div></form>`,true);
+  const defaultTicketDate=isTicket?(status.kind==='boleto_regreso'?t().fecha_fin:t().fecha_inicio):v3Day()?.fecha;
+  const dateInput=isMeal?`<input type="hidden" name="fecha" value="${safe(old.fecha)}"><p class="v31-locked-date">${dateES(old.fecha)} · para cambiar de día, edita la comida correspondiente de ese día.</p>`:selectDay(defaultTicketDate);
+  const leg=isTicket?travelLeg(status.kind,status.origin):null;
+  const ticketName=isTicket?`${o.name} · ${leg.from} → ${leg.to}`:o.name;
+  const ticketCities=isTicket?`<div class="field"><label>Ciudad / municipio de salida (opcional)</label><input name="ciudad_salida" maxlength="80" placeholder="Ej. Boca del Río"></div><div class="field"><label>Ciudad / municipio de llegada (opcional)</label><input name="ciudad_llegada" maxlength="80" placeholder="Ej. Xalapa"></div>`:'';
+  showModal('Presupuestar · '+o.name,`<div class="v31-picked"><strong>${safe(o.name)}</strong><span>Rango de referencia: ${m(o.lo)} a ${m(o.hi)} ${safe(o.unit||'')}</span>${o.url?`<a href="${safe(o.url)}" target="_blank" rel="noopener noreferrer">Consultar precios o ubicación ↗</a>`:''}</div><form id="v31-option-form"><div class="form-grid"><div class="field full"><label>Nombre o descripción</label><input name="nombre" maxlength="140" required value="${safe(isMeal?(status.kind==='desayuno'?'Desayuno':status.kind==='cena'?'Cena':'Comida')+' · '+o.name:ticketName)}"></div><div class="field"><label>Día del itinerario</label>${dateInput}</div><div class="field"><label>Hora (opcional)</label><input name="hora" type="time" value="${isMeal?(status.kind==='desayuno'?'08:30':status.kind==='cena'?'20:00':'14:30'):'10:00'}"></div><div class="field"><label>Precio ${isHotel?'por habitación/noche':isRent?'por día':isTicket?'por boleto':isMeal||isActivity?'por persona':'por servicio'} (MXN)</label><input name="precio_unitario" type="number" min="0" max="1000000" step="0.01" value="${unit}" required></div><div class="field"><label>${label}</label><input name="cantidad" type="number" min="1" max="365" step="1" value="${q}" required></div><div class="field"><label>${isHotel?'Habitaciones calculadas según viajeros':'Personas que consumen o pagan esta unidad'}</label><input name="personas" type="number" min="1" max="${n()}" step="1" value="${persons}" ${isHotel?'readonly':''} required></div><div class="field"><label>¿Está incluido en otro pago?</label><select name="incluido"><option value="0">No, contar el costo</option><option value="1">Sí, costo adicional $0</option></select></div>${ticketCities}<div class="field full"><label>Nota</label><textarea name="nota" maxlength="350">Rango orientativo: ${o.lo}–${o.hi} MXN. ${isHotel?'Capacidad estimada de 2 personas por habitación; verificar con alojamiento.':isTicket?'Estado de origen habitual: '+status.origin+'; Ruta: '+leg.from+' → '+leg.to+'; ciudades, terminales y disponibilidad por confirmar.':'Confirmar precio real antes del viaje.'}</textarea></div></div><div class="v31-live-total">Costo previsto para tu viaje: <strong id="v31-total">${m(unit*q*persons)}</strong></div>${subtitle}<div class="form-actions">${homeButton}<button class="btn primary" type="submit">${isMeal?'Actualizar esta comida':'Añadir al presupuesto'} →</button></div></form>`,true);
  }
  async function save(form){
   const p=Object.fromEntries(new FormData(form).entries());const o=status.selected;const isMeal=status.mode==='meal',isHotel=status.mode==='hotel',isActivity=status.mode==='activity';
@@ -156,6 +202,18 @@ const TP31 = (() => {
     }
   } else {
     const type=status.kind;
+    if(status.mode==='ticket'){
+      if(!status.origin||!GEO[status.origin])throw Error('Indica el estado de origen o regreso.');
+      const leg=travelLeg(type,status.origin);
+      const departure=String(p.ciudad_salida||'').trim();
+      const arrival=String(p.ciudad_llegada||'').trim();
+      const from=departure?`${departure}, ${leg.from}`:leg.from;
+      const to=arrival?`${arrival}, ${leg.to}`:leg.to;
+      const defaultName=`${status.selected.name} · ${leg.from} → ${leg.to}`;
+      if(p.nombre===defaultName)p.nombre=`${status.selected.name} · ${from} → ${to}`.slice(0,140);
+      // Origen habitual primero para recuperarlo al abrir otro día o dispositivo.
+      p.nota=`Estado de origen habitual: ${status.origin}; Ruta: ${from} → ${to}; Referencia, no tarifa confirmada. ${p.nota||''}`.slice(0,350);
+    }
     const body={tipo:type,fecha:p.fecha,nombre:p.nombre,hora:p.hora,precio_unitario:price,cantidad:quantity,personas:people,incluido:Number(p.incluido),nota:p.nota};
     let url=`/api/viajes/${state.tripId}/plan/conceptos`;const old=status.old;
     if(isMeal){if(!old)throw Error('La comida no existe en el itinerario.');url+='/'+old.id_concepto;}
