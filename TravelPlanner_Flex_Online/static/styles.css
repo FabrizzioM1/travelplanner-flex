@@ -227,3 +227,24 @@ body{background:#f5f8f8}
  .v3-recommend-preview{grid-template-columns:75px 1fr}.v3-recommend-preview img{height:75px}
 }
 @media(max-width:390px){.v3-menu-grid{grid-template-columns:1fr 1fr}.v3-menu-grid button{padding:12px}.v3-day-tabs button{flex-basis:88px}}
+
+/* TravelPlanner 3.1 - tarjetas de opciones y cálculo previo */
+.v31-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0}
+.v31-choice{border:1px solid #d9e9e8;background:#fff;border-radius:17px;padding:17px;display:flex;flex-direction:column;gap:14px;min-width:0;box-shadow:0 5px 16px #16394e0b}
+.v31-choice-main{display:flex;gap:11px;align-items:flex-start}
+.v31-emoji{flex:0 0 35px;width:35px;height:35px;display:grid;place-items:center;font-size:23px;background:#ebf5f2;border-radius:10px}
+.v31-grow{min-width:0;flex:1}.v31-grow strong{display:block;color:#14384b;font-size:15px;line-height:1.3;margin:2px 0 6px}
+.v31-grow small{display:block;color:#567382;font-size:12px;line-height:1.5}.v31-grow a{font-size:11px;color:#087d73;display:inline-block;margin-top:8px;text-decoration:underline}
+.v31-choice-footer{border-top:1px solid #e8f0f0;padding-top:12px;display:flex;align-items:center;justify-content:space-between;gap:9px}
+.v31-choice-footer span{display:flex;flex-direction:column;gap:3px}.v31-choice-footer span strong{font-size:14px;color:#117f74}.v31-choice-footer span small{font-size:10px;color:#677b82}
+.v31-choice-footer .btn{flex-shrink:0;padding:9px 12px;font-size:12px}
+.v31-disclaimer{color:#536f7c;background:#f2f7f7;padding:13px;border-radius:10px;font-size:12px;line-height:1.6;margin:15px 0}
+.v31-field-label{font-size:13px;display:block;font-weight:750;margin:12px 0 6px;color:#1e4355}
+#v31-origin{width:100%;padding:12px 14px;border-radius:10px;border:1px solid #cddedd;background:#fff;color:#194257}
+.v31-picked{display:flex;gap:7px;flex-direction:column;background:#ecf7f3;border:1px solid #cfe9e0;border-radius:13px;padding:16px;margin-bottom:18px}
+.v31-picked strong{font-size:18px;color:#163b4b}.v31-picked span{font-size:12px;color:#4b7274}.v31-picked a{font-size:12px;color:#13877e;text-decoration:underline}
+.v31-live-total{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#124354;color:#fff;border-radius:13px;padding:16px;font-size:13px;margin-top:18px}
+.v31-live-total strong{font-size:20px}.v31-locked-date{font-size:12px;color:#516b72;background:#f4f8f8;border-radius:9px;padding:13px;margin:0}
+@media(max-width:700px){.v31-options{grid-template-columns:1fr}.v31-choice{padding:13px}.v31-choice-footer{align-items:center}.v31-live-total{flex-direction:column;align-items:flex-start}}
+
+.v31-real-food-button{width:100%;padding:13px;margin:14px 0 0;border:1px solid #9dd7cb;color:#077b70;background:#edf8f5}
