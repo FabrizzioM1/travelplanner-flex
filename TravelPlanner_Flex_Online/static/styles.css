@@ -271,3 +271,14 @@ body{background:#f5f8f8}
 .v33-payers label{display:flex;align-items:center;gap:9px;border:1px solid #e4ebec;border-radius:9px;padding:9px}
 .v33-payers input{width:auto!important;flex-shrink:0}
 #v33-payers-form{margin:14px 0;padding-top:14px;border-top:1px solid #e3ebeb}
+
+/* TravelPlanner 3.3.1 — configuración de viaje visible y cancelación segura */
+.v34-trip-buttons{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.v34-trip-buttons .btn{white-space:normal;text-align:center}
+.v34-members{border:1px solid #d8e7e5;background:#f7fbfb;border-radius:15px;padding:14px 15px;margin-top:18px}
+.v34-members h3{font-size:16px;margin:0 0 6px;color:#173b42}
+.v34-members p{line-height:1.55}
+.v34-member-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid #dce8e9}
+.v34-member-row strong{font-size:14px;overflow-wrap:anywhere}
+.v34-member-row button{flex-shrink:0}
+@media(max-width:560px){.v3-trip-heading{align-items:flex-start;flex-wrap:wrap}.v34-trip-buttons{width:100%}.v34-trip-buttons .btn{flex:1}.v34-member-row{gap:7px}}
