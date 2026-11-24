@@ -38,7 +38,7 @@ from municipios_recomendados import (
 )
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
-from planificador_v3 import create_plan_schema, ensure_trip_plan, register_planner
+from planificador_v3 import create_plan_schema, ensure_trip_plan, reconcile_trip_plan, set_ticket_link, register_planner
 from restaurantes_v31 import register_restaurants
 from municipios_destacados_v32 import filas_para_catalogo, recomendaciones as recomendar_destacados
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -603,6 +603,8 @@ def validate_item(db,table,data,existing=None):
         try:
             a=dt.datetime.fromisoformat(data['fecha_hora_salida']);
             if data.get('fecha_hora_llegada') and dt.datetime.fromisoformat(data['fecha_hora_llegada'])<a:raise UserError("La llegada no puede ser anterior a la salida.")
+            if not (date_value(t['fecha_inicio'])<=a.date()<=date_value(t['fecha_fin'])):
+                raise UserError('El transporte debe salir en una fecha dentro del viaje.')
         except ValueError:raise UserError("Fecha y hora inválidas.")
     if table=="itinerario":
         required(data,['fecha']);day=date_value(data['fecha'])
@@ -664,13 +666,20 @@ def detail(db,tid):
     travelers=rows(db,'SELECT * FROM viajero WHERE id_viaje=? ORDER BY id_viajero',(tid,))
     votos=rows(db,"""SELECT v.id_lugar, l.nombre AS lugar, SUM(CASE WHEN v.decision=1 THEN 1 ELSE 0 END) si, SUM(CASE WHEN v.decision=-1 THEN 1 ELSE 0 END) no
           FROM voto v JOIN viajero t ON v.id_viajero=t.id_viajero JOIN lugar l ON v.id_lugar=l.id_lugar WHERE t.id_viaje=? GROUP BY v.id_lugar, l.nombre""",(tid,))
-    split={q['nombre']:{'pagado':0.0,'parte':0.0,'saldo':0.0} for q in travelers}
+    cfg=row(db,'SELECT pagadores FROM plan_configuracion WHERE id_viaje=?',(tid,)) or {'pagadores':len(travelers)}
+    marked=rows(db,'SELECT id_viajero FROM plan_aportante WHERE id_viaje=?',(tid,))
+    chosen_ids={x['id_viajero'] for x in marked}
+    chosen=[q for q in travelers if q['id_viajero'] in chosen_ids] if marked else travelers[:min(len(travelers),int(cfg['pagadores']))]
+    chosen_ids={q['id_viajero'] for q in chosen}
+    labels={q['id_viajero']:q['nombre']+' (#'+str(q['id_viajero'])+')' for q in travelers}
+    split={labels[q['id_viajero']]:{'id_viajero':q['id_viajero'],'nombre':q['nombre'],'pagado':0.0,'parte':0.0,'saldo':0.0,
+                                  'es_aportante':q['id_viajero'] in chosen_ids} for q in travelers}
     for ex in expenses:
-        if ex['compartido'] and ex['id_pagador'] is not None and travelers:
-            share=ex['monto']/len(travelers)
-            for q in travelers:split[q['nombre']]['parte']+=share
-            payer=next((q for q in travelers if q['id_viajero']==ex['id_pagador']),None)
-            if payer:split[payer['nombre']]['pagado']+=ex['monto']
+        if ex['compartido'] and ex['id_pagador'] is not None and chosen:
+            share=float(ex['monto'])/len(chosen)
+            for q in chosen:split[labels[q['id_viajero']]]['parte']+=share
+            if any(q['id_viajero']==ex['id_pagador'] for q in travelers):
+                split[labels[ex['id_pagador']]]['pagado']+=float(ex['monto'])
     for x in split.values():
         x['pagado']=round(x['pagado'],2);x['parte']=round(x['parte'],2);x['saldo']=round(x['pagado']-x['parte'],2)
     return {'viaje':t,'dias':days,'hospedajes':rows(db,'SELECT * FROM hospedaje WHERE id_viaje=?',(tid,)),
@@ -1136,9 +1145,12 @@ def api_router(subpath):
                 if merged['destino'] not in DESTINOS: raise UserError('Destino no disponible.')
                 if date_value(merged['fecha_fin']) < date_value(merged['fecha_inicio']): raise UserError('Fechas invertidas.')
                 count = int(merged['num_viajeros'])
-                if count <= 0: raise UserError('Debes tener al menos un viajero.')
+                if not 1<=count<=100: raise UserError('Debes indicar de 1 a 100 viajeros.')
+                try: reconcile_trip_plan(db,old,merged,rows)
+                except ValueError as err: raise UserError(str(err),409)
                 db.execute('UPDATE viaje SET nombre=?,destino=?,fecha_inicio=?,fecha_fin=?,num_viajeros=?,notas=? WHERE id_viaje=? AND id_usuario=?',
                            (merged['nombre'],merged['destino'],merged['fecha_inicio'],merged['fecha_fin'],count,merged.get('notas',''),vid,current_user_id()))
+                ensure_trip_plan(db,{**merged,'id_viaje':vid})
                 return jsonify({'ok': True})
             if len(bits) == 4 and bits[3] == 'recomendaciones' and method == 'GET':
                 return jsonify({'lugares': recommend(db, vid, qs.get('lluvia','0') == '1')})
@@ -1199,13 +1211,17 @@ def api_router(subpath):
               'presupuesto_categoria': rows(db, f'SELECT c.* FROM presupuesto_categoria c JOIN presupuesto p ON p.id_presupuesto=c.id_presupuesto WHERE p.id_viaje IN {trip_filter}', (uid,)),
               'gasto': rows(db, f'SELECT * FROM gasto WHERE id_viaje IN {trip_filter}', (uid,)),
               'viajero': rows(db, f'SELECT * FROM viajero WHERE id_viaje IN {trip_filter}', (uid,)),
+              'plan_concepto': rows(db, f'SELECT * FROM plan_concepto WHERE id_viaje IN {trip_filter}', (uid,)),
+              'plan_configuracion': rows(db, f'SELECT * FROM plan_configuracion WHERE id_viaje IN {trip_filter}', (uid,)),
+              'plan_vinculo': rows(db, f'SELECT * FROM plan_vinculo WHERE id_viaje IN {trip_filter}', (uid,)),
+              'plan_aportante': rows(db, f'SELECT * FROM plan_aportante WHERE id_viaje IN {trip_filter}', (uid,)),
               'preferencia': rows(db, f'SELECT * FROM preferencia WHERE id_viaje IN {trip_filter}', (uid,)),
               'voto': rows(db, f'SELECT v.* FROM voto v JOIN viajero t ON t.id_viajero=v.id_viajero WHERE t.id_viaje IN {trip_filter}', (uid,)),
               'alternativa_actividad': rows(db, f'SELECT a.* FROM alternativa_actividad a JOIN actividad x ON x.id_actividad=a.id_actividad JOIN itinerario i ON i.id_itinerario=x.id_itinerario WHERE i.id_viaje IN {trip_filter}', (uid,)),
               'escenario_viaje': rows(db, f'SELECT * FROM escenario_viaje WHERE id_viaje IN {trip_filter}', (uid,)),
               'lugar': rows(db, 'SELECT * FROM lugar ORDER BY ciudad,nombre'),
             }
-        return jsonify({'version':'2.0','fecha_exportacion':now(),'datos':content})
+        return jsonify({'version':'3.3','fecha_exportacion':now(),'datos':content})
 
     if path == '/api/clima' and method == 'GET':
         city = qs.get('ciudad','')
@@ -1232,11 +1248,15 @@ def api_router(subpath):
                 keys=list(data.keys())
                 if not keys: raise UserError('Campos vacíos.')
                 cur=db.execute(f"INSERT INTO {sqltable} ({','.join(keys)}) VALUES ({','.join('?' for _ in keys)})", [data[x] for x in keys])
+                if table=='transporte' and p.get('vincular_concepto_id'):
+                    try: set_ticket_link(db,int(data['id_viaje']),cur.lastrowid,p.get('vincular_concepto_id'),rows)
+                    except (ValueError,TypeError) as err:raise UserError(str(err))
                 return jsonify({'id':cur.lastrowid}), 201
         if rid is not None and method in ('PUT','DELETE'):
             with connect() as db:
                 trip_for_child(db, table, pk, rid)
                 if method == 'DELETE':
+                    if table=='transporte':db.execute("DELETE FROM plan_vinculo WHERE tipo='transporte' AND id_registro=?",(rid,))
                     db.execute(f'DELETE FROM {sqltable} WHERE {pk}=?', (rid,))
                     return jsonify({'ok':True})
                 orig=row(db, f'SELECT * FROM {sqltable} WHERE {pk}=?', (rid,))
@@ -1249,6 +1269,9 @@ def api_router(subpath):
                 validate_item(db, table, merged, orig)
                 keys=list(upd.keys())
                 if keys: db.execute(f"UPDATE {sqltable} SET {','.join(x+'=?' for x in keys)} WHERE {pk}=?", [merged[x] for x in keys]+[rid])
+                if table=='transporte' and 'vincular_concepto_id' in p:
+                    try: set_ticket_link(db,int(orig['id_viaje']),rid,p['vincular_concepto_id'],rows)
+                    except (ValueError,TypeError) as err:raise UserError(str(err))
                 return jsonify({'ok':True})
 
     raise UserError('Función no encontrada.',404)
