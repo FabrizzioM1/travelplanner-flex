@@ -259,3 +259,15 @@ body{background:#f5f8f8}
 
 .v32-ideas-label{display:block;font-size:.86rem;font-weight:650;margin:8px 0 4px;color:#375667}
 #v32-plan-municipio{width:100%;min-height:42px;margin-bottom:12px;border-radius:10px;border:1px solid #b9d4d0;padding:8px 10px;background:white;color:#123047}
+
+/* TravelPlanner Flex 3.3 · escenarios, validaciones y selección de aportantes */
+.v33-scenarios,.v33-warnings{border:1px solid #d4e4e3;border-radius:12px;padding:14px;margin:14px 0;background:#f4fbfa;color:#183e48}
+.v33-scenarios>strong,.v33-warnings>strong{display:block;margin-bottom:9px}
+.v33-scenarios>div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #e4eeed}
+.v33-scenarios small{display:block;color:#58747c;margin-top:8px}
+.v33-warnings{background:#fffaf0;border-color:#f0dcb2}
+.v33-warnings p{font-size:.91rem;margin:7px 0}
+.v33-payers{display:grid;gap:8px;margin:10px 0}
+.v33-payers label{display:flex;align-items:center;gap:9px;border:1px solid #e4ebec;border-radius:9px;padding:9px}
+.v33-payers input{width:auto!important;flex-shrink:0}
+#v33-payers-form{margin:14px 0;padding-top:14px;border-top:1px solid #e3ebeb}
