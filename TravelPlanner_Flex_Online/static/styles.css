@@ -248,3 +248,14 @@ body{background:#f5f8f8}
 @media(max-width:700px){.v31-options{grid-template-columns:1fr}.v31-choice{padding:13px}.v31-choice-footer{align-items:center}.v31-live-total{flex-direction:column;align-items:flex-start}}
 
 .v31-real-food-button{width:100%;padding:13px;margin:14px 0 0;border:1px solid #9dd7cb;color:#077b70;background:#edf8f5}
+
+/* TravelPlanner 3.2: editar hoteles sin duplicar costos */
+.v32-lodging-existing{border:1px solid #b7d9d4;border-radius:16px;padding:14px;margin:16px 0;background:#f4faf8;color:#17394b}
+.v32-lodging-existing>p{margin:5px 0 10px;color:#50727c;font-size:.9rem}
+.v32-lodging-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:9px 0;border-top:1px solid #d4e7e4}
+.v32-lodging-row>span{flex:1;min-width:170px;line-height:1.45;font-size:.9rem}
+.v32-hotel-replace-note{background:#e0f5f0;border-radius:12px;padding:12px 14px;margin-bottom:12px;color:#115d56}
+.v3-cost-line .v3-icon-btn{white-space:nowrap}
+
+.v32-ideas-label{display:block;font-size:.86rem;font-weight:650;margin:8px 0 4px;color:#375667}
+#v32-plan-municipio{width:100%;min-height:42px;margin-bottom:12px;border-radius:10px;border:1px solid #b9d4d0;padding:8px 10px;background:white;color:#123047}
