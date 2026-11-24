@@ -6,6 +6,7 @@ por proceso para reducir solicitudes a un servidor comunitario compartido.
 """
 from __future__ import annotations
 import json
+import math
 import threading
 import time
 from urllib.parse import urlencode
@@ -55,23 +56,31 @@ def register_restaurants(app,destinos:dict):
     @app.get('/api/opciones/restaurantes')
     def api_food_options():
         dest=request.args.get('destino','')
+        try:
+            lat=float(request.args['lat']) if 'lat' in request.args else None
+            lon=float(request.args['lon']) if 'lon' in request.args else None
+            if (lat is None)!=(lon is None):raise ValueError()
+            if lat is not None and not (math.isfinite(lat) and math.isfinite(lon) and 14.0<=lat<=33.0 and -118.0<=lon<=-86.0):raise ValueError()
+        except (ValueError,TypeError):
+            return jsonify({'error':'Coordenadas inválidas para México.'}),400
         if dest not in destinos:
             return jsonify({'error':'Destino no reconocido.'}),400
+        key=(dest, round(lat,3),round(lon,3)) if lat is not None else (dest,None,None)
         with LOCK:
-            cached=CACHE.get(dest)
+            cached=CACHE.get(key)
             if cached and cached[0]>time.monotonic():
                 return jsonify({'resultados':cached[1],'fuente':'OpenStreetMap / Overpass (caché)',
                                 'aviso':cached[2]})
         try:
-            places=nearby_food(*destinos[dest])
-            note=('Puntos de comida registrados cerca de la coordenada de referencia del estado. '
-                  'La cobertura y vigencia de los nombres puede variar; NO se consultan menús, tarifas ni disponibilidad. '
-                  'Comprueba los datos en la ficha del establecimiento.')
+            places=nearby_food(lat,lon) if lat is not None else nearby_food(*destinos[dest])
+            note=('Puntos de comida cercanos a la actividad seleccionada. ' if lat is not None else 'Puntos de comida cercanos a la ubicación de referencia del estado. ')
+            note += ('La cobertura y vigencia de los nombres puede variar; NO se consultan menús, tarifas ni disponibilidad. '
+                     'Comprueba los datos en la ficha del establecimiento.')
             ttl=12*3600
         except Exception:
             places=[]
             note=('No fue posible consultar OpenStreetMap en este momento. '
                   'Puedes usar las zonas gastronómicas del catálogo y comprobar restaurantes en Maps.')
             ttl=15*60
-        with LOCK: CACHE[dest]=(time.monotonic()+ttl,places,note)
+        with LOCK: CACHE[key]=(time.monotonic()+ttl,places,note)
         return jsonify({'resultados':places,'fuente':'OpenStreetMap / Overpass','aviso':note})
