@@ -38,6 +38,7 @@ from municipios_recomendados import (
 )
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
+from planificador_v3 import create_plan_schema, ensure_trip_plan, register_planner
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -368,6 +369,7 @@ def init_db():
         db.execute("""CREATE TABLE IF NOT EXISTS cache_consulta_municipio (
             clave TEXT PRIMARY KEY, payload TEXT NOT NULL, actualizado TEXT NOT NULL
         )""")
+        create_plan_schema(db)
 
 
 def _plain_commons(value):
@@ -680,12 +682,15 @@ def create_trip(db, p):
     required(p, ['nombre','destino','fecha_inicio','fecha_fin'])
     if p['destino'] not in DESTINOS: raise UserError('Selecciona una de las 32 entidades federativas disponibles.')
     if date_value(p['fecha_fin']) < date_value(p['fecha_inicio']): raise UserError('La fecha de finalización no puede ser anterior a la de inicio.')
+    if (date_value(p['fecha_fin'])-date_value(p['fecha_inicio'])).days >= 60: raise UserError('Esta versión permite planear hasta 60 días por viaje.')
     count = int(p.get('num_viajeros', 1))
     if not 1 <= count <= 100: raise UserError('El número de viajeros debe estar entre 1 y 100.')
     cur = db.execute('INSERT INTO viaje(id_usuario,nombre,destino,fecha_inicio,fecha_fin,num_viajeros,notas) VALUES (?,?,?,?,?,?,?)',
         (current_user_id(), p['nombre'].strip(), p['destino'], p['fecha_inicio'], p['fecha_fin'], count, p.get('notas','')))
     tid = cur.lastrowid
     db.execute('INSERT INTO presupuesto(id_viaje,monto_total,moneda) VALUES (?,?,?)', (tid, money(p.get('presupuesto',0)), 'MXN'))
+    created = {'id_viaje': tid, 'fecha_inicio': p['fecha_inicio'], 'fecha_fin': p['fecha_fin'], 'num_viajeros':count}
+    ensure_trip_plan(db,created)
     return tid
 
 def recommend(db, tid, for_rain=False):
@@ -1245,6 +1250,9 @@ def api_router(subpath):
 
     raise UserError('Función no encontrada.',404)
 
+
+# Funciones 3.0 registradas sin eliminar rutas anteriores ni tablas existentes.
+register_planner(app, connect, trip, rows, UserError)
 
 if IS_HOSTED and not DATABASE_URL:
     raise RuntimeError('Configura DATABASE_URL con la cadena de conexión de Neon PostgreSQL.')
