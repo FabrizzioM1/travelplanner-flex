@@ -40,6 +40,7 @@ from municipios_recomendados import (
 from flask import Flask, g, jsonify, request, send_from_directory, session
 from planificador_v3 import create_plan_schema, ensure_trip_plan, register_planner
 from restaurantes_v31 import register_restaurants
+from municipios_destacados_v32 import filas_para_catalogo, recomendaciones as recomendar_destacados
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -350,7 +351,7 @@ def init_db():
         # nombres, costos, fotografías ni otros datos de lugares ya guardados.
         known_ids = {x['id_lugar'] for x in rows(db, 'SELECT id_lugar FROM lugar')}
         pending = []
-        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES) + list(EXPERIENCE_PLACES) + lugares_para_sembrar(PHOTO_PLACEHOLDER):
+        for place in list(PLACES) + list(NATIONAL_PLACES) + list(EXPANDED_PLACES) + list(EXPERIENCE_PLACES) + lugares_para_sembrar(PHOTO_PLACEHOLDER) + filas_para_catalogo(PHOTO_PLACEHOLDER):
             item = list(place)
             if item[0] in known_ids:
                 continue
@@ -954,13 +955,14 @@ def _municipio_recomendaciones(estado,municipio,actividad,interes,cerca=False):
 
     # Conservar los 8 sitios verificados del piloto Catemaco.
     curated = recomendar(estado,municipio,'Naturaleza','Todas') if municipio=='Catemaco' and actividad in ('Naturaleza','Todas') else []
+    curated += recomendar_destacados(municipio, actividad, interes)
     for item in curated:
-        item['categoria']='Naturaleza'
+        item['categoria']=item.get('categoria','Naturaleza')
         item['cerca']=False
         item['tipo_fuente']=item.get('tipo_fuente','Fuente oficial')
         item['tipo_precio']='Consultar tarifa'
         # Recalcular afinidad cuando hay selección de interés.
-        if interes!='Todos':
+        if interes!='Todos' and municipio=='Catemaco':
             affinity=15 if any(normalizar_mun(interes)==normalizar_mun(t) or normalizar_mun(interes) in normalizar_mun(t) for t in item.get('subactividades',[])) else 0
             item['puntaje']=item['puntaje'] - item['desglose'][2]['puntos'] + affinity
             item['desglose'][2]['puntos']=affinity
@@ -1004,7 +1006,7 @@ def _municipio_recomendaciones(estado,municipio,actividad,interes,cerca=False):
         'estados':['Veracruz'], 'actividades':list(MUNICIPAL_CATEGORIAS),
         'preferencias':list(MUNICIPAL_INTERESES),
         'estado':estado,'municipio':municipio,
-        'origen':'catálogo curado + OSM consultado bajo demanda',
+        'origen':'fichas municipales curadas + OSM consultado bajo demanda',
         'fuente_municipios':'https://www.inegi.org.mx/servicios/catalogounico/',
         'osm_fuente':'https://www.openstreetmap.org/copyright',
         'estado_consulta':status,'estado_cercania':nearstatus,
