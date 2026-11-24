@@ -144,9 +144,14 @@ def reconcile_trip_plan(db, previous, edited, rows):
         details=', '.join(f'{name}: {qty}' for name,qty in conflict_counts.items())
         raise ValueError('Antes de cambiar las fechas revisa registros que quedarían fuera: '+details+'. No se eliminó ningún dato.')
     # Count can't be reduced below number of travelers with a registered assigned concept.
-    bad_people=[x for x in user_entries if not out(x['fecha']) and int(x['personas'])>count and not default_meal(x)]
+    # Meals and tickets priced per person for the entire former group scale with
+    # the group size. Other/custom concepts remain protected from silent changes.
+    per_person_types=set(FOOD_TYPES)|{'boleto_ida','boleto_regreso'}
+    former_count=int(previous['num_viajeros'])
+    group_item=lambda x: x['tipo'] in per_person_types and int(x['personas'])==former_count
+    bad_people=[x for x in user_entries if not out(x['fecha']) and int(x['personas'])>count and not group_item(x)]
     if bad_people:
-        raise ValueError(f'Hay {len(bad_people)} conceptos personalizados para más de {count} viajeros. Edita sus participantes primero.')
+        raise ValueError(f'Hay {len(bad_people)} conceptos de grupo para más de {count} viajeros. Ajusta esos conceptos antes de guardar el cambio.')
     if start!=old_from or end!=old_to:
         for item in outside:
             db.execute('DELETE FROM plan_concepto WHERE id_concepto=?',(item['id_concepto'],))
@@ -162,12 +167,43 @@ def reconcile_trip_plan(db, previous, edited, rows):
         selected=db.execute('SELECT COUNT(*) FROM plan_aportante WHERE id_viaje=?',(tid,)).fetchone()[0]
         if registered>count or selected>count:
             raise ValueError(f'El viaje tiene {registered} integrantes identificados y {selected} aportantes elegidos. Ajusta esas listas antes de cambiar a {count} viajeros.')
-        # Update untouched automatic meals; leave individually configured food items alone.
+        # Scale full-group per-person meals (including chosen restaurants) and
+        # unbooked ticket estimates. Never change paid reservation amounts.
         for item in user_entries:
-            if not out(item['fecha']) and default_meal(item):
+            if not out(item['fecha']) and group_item(item):
                 db.execute('UPDATE plan_concepto SET personas=? WHERE id_concepto=?',(count,item['id_concepto']))
         db.execute('UPDATE plan_configuracion SET pagadores=CASE WHEN pagadores>? THEN ? ELSE pagadores END WHERE id_viaje=?',(count,count,tid))
     return {'ok':True,'fecha_inicio':edited['fecha_inicio'],'fecha_fin':edited['fecha_fin']}
+
+
+
+def cancel_trip_participant(db, previous, traveler_id, rows):
+    """Cancel one named participant and safely update the trip size, atomically.
+
+    The caller must own and lock/access the trip in the enclosing DB transaction.
+    Recorded payments are never discarded; the user must reassign those first.
+    Booked hotel/transport amounts remain untouched and should be rechecked.
+    """
+    tid=int(previous['id_viaje'])
+    try: participant_id=int(traveler_id)
+    except (ValueError,TypeError):raise ValueError('Selecciona un integrante válido.')
+    participant=rows(db,'SELECT id_viajero,nombre FROM viajero WHERE id_viaje=? AND id_viajero=?',(tid,participant_id))
+    if not participant:raise ValueError('El integrante no pertenece a este viaje.')
+    prior_count=int(previous['num_viajeros'])
+    if prior_count<=1:raise ValueError('Un viaje debe conservar al menos una persona.')
+    paid=db.execute('SELECT COUNT(*) FROM gasto WHERE id_viaje=? AND id_pagador=?',(tid,participant_id)).fetchone()[0]
+    if paid:raise ValueError(f'Este integrante tiene {paid} gasto(s) real(es) a su nombre. Reasigna primero quién pagó en Gastos reales; no se borrarán pagos automáticamente.')
+    updated={**previous,'num_viajeros':prior_count-1}
+    # Other registered travelers remain; cascades remove only this person's votes and payer selection.
+    db.execute('DELETE FROM viajero WHERE id_viaje=? AND id_viajero=?',(tid,participant_id))
+    reconcile_trip_plan(db,previous,updated,rows)
+    db.execute('UPDATE viaje SET num_viajeros=? WHERE id_viaje=?',(prior_count-1,tid))
+    ensure_trip_plan(db,updated)
+    selected=db.execute('SELECT COUNT(*) FROM plan_aportante WHERE id_viaje=?',(tid,)).fetchone()[0]
+    if selected:
+        db.execute('UPDATE plan_configuracion SET pagadores=? WHERE id_viaje=?',(selected,tid))
+    return {'ok':True,'num_viajeros':prior_count-1,'nombre':participant[0]['nombre'],
+            'aviso':'El itinerario y las comidas automáticas se actualizaron. Comprueba boletos, hotel y gastos personalizados: sus precios no se cambian sin tu autorización.'}
 
 
 def set_ticket_link(db, tid, entity_id, concept_id, rows):
