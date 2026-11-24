@@ -39,6 +39,7 @@ from municipios_recomendados import (
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
 from planificador_v3 import create_plan_schema, ensure_trip_plan, register_planner
+from restaurantes_v31 import register_restaurants
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -1253,6 +1254,7 @@ def api_router(subpath):
 
 # Funciones 3.0 registradas sin eliminar rutas anteriores ni tablas existentes.
 register_planner(app, connect, trip, rows, UserError)
+register_restaurants(app, DESTINOS)
 
 if IS_HOSTED and not DATABASE_URL:
     raise RuntimeError('Configura DATABASE_URL con la cadena de conexión de Neon PostgreSQL.')
