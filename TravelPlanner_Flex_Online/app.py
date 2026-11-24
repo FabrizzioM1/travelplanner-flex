@@ -38,7 +38,7 @@ from municipios_recomendados import (
 )
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
-from planificador_v3 import create_plan_schema, ensure_trip_plan, reconcile_trip_plan, set_ticket_link, register_planner
+from planificador_v3 import create_plan_schema, ensure_trip_plan, reconcile_trip_plan, cancel_trip_participant, set_ticket_link, register_planner
 from restaurantes_v31 import register_restaurants
 from municipios_destacados_v32 import filas_para_catalogo, recomendaciones as recomendar_destacados
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -1152,6 +1152,11 @@ def api_router(subpath):
                            (merged['nombre'],merged['destino'],merged['fecha_inicio'],merged['fecha_fin'],count,merged.get('notas',''),vid,current_user_id()))
                 ensure_trip_plan(db,{**merged,'id_viaje':vid})
                 return jsonify({'ok': True})
+            if len(bits) == 4 and bits[3] == 'cancelar-viajero' and method == 'POST':
+                old = trip(db, vid)
+                try: result=cancel_trip_participant(db,old,p.get('id_viajero'),rows)
+                except ValueError as err:raise UserError(str(err),409)
+                return jsonify(result)
             if len(bits) == 4 and bits[3] == 'recomendaciones' and method == 'GET':
                 return jsonify({'lugares': recommend(db, vid, qs.get('lluvia','0') == '1')})
             if len(bits) == 4 and bits[3] == 'ruta' and method == 'GET':
