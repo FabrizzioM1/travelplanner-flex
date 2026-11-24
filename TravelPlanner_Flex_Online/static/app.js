@@ -613,7 +613,7 @@ if(!day)return `<div class="v3-blank">No se pudieron crear los días del viaje. 
 const meals=day.conceptos.filter(x=>['desayuno','comida','cena'].includes(x.tipo));
 const other=day.conceptos.filter(x=>!['desayuno','comida','cena'].includes(x.tipo));
 const datePieces=dateES(day.fecha);
-const suggestions=state.catalog.filter(l=>l.ciudad===t.destino).filter(l=>!day.actividades.some(a=>a.lugar_id===l.id_lugar)).slice(0,4);
+const suggestions=state.catalog.filter(l=>l.ciudad===t.destino&&classifyPlace(l)!=='Gastronomía').filter(l=>!day.actividades.some(a=>a.lugar_id===l.id_lugar)).slice(0,4);
 const otherLines=[...other.map(x=>v3GroupItem('concepto',x.nombre,x.total,x.id_concepto,PLANNER_TYPES[x.tipo]?.[0]||x.tipo)),
  ...day.hospedajes.map(x=>v3GroupItem('hospedaje','Hospedaje: '+x.nombre,x.costo,x.id_hospedaje,'Costo de estancia total, contado una sola vez')),
  ...day.transportes.map(x=>v3GroupItem('transporte','Transporte: '+x.origen+' → '+x.destino,x.costo,x.id_transporte,'Monto total de la reserva'))];
@@ -637,23 +637,24 @@ function v3Summary(){if(!trip()||!state.plan)return v3Landing();const p=state.pl
 <aside class="v3-panel v3-split-panel"><span class="v3-kicker">DISTRIBUCIÓN DEL DINERO</span><h2>¿Quiénes pagarán?</h2><p>Viajan ${t.num_viajeros} personas, pero puedes elegir cuántas aportan.</p><form id="v3-config-form"><label>Personas que aportan</label><select name="pagadores">${Array.from({length:t.num_viajeros},(_,i)=>`<option value="${i+1}" ${p.pagadores===i+1?'selected':''}>${i+1} ${i===0?'persona':'personas'}</option>`).join('')}</select><label>Reserva para imprevistos</label><select name="reserva_pct">${[0,5,10,15,20,25,30].map(v=>`<option value="${v}" ${Number(c.reserva_pct)===v?'selected':''}>${v}%</option>`).join('')}</select><button class="btn outline full" type="submit">Actualizar cálculo</button></form><div class="v3-summary-grand"><small>Dinero recomendado para el viaje</small><strong>${money(p.total_recomendado)}</strong><span>Incluye ${money(p.fondo_imprevistos)} de margen.</span></div><div class="v3-summary-each"><small>Por cada una de las ${p.pagadores} personas que pagan</small><strong>${money(p.aporte_por_pagador)}</strong></div><p class="v3-explain">El reparto es igual entre quienes aportan. No presupone que todos los viajeros paguen. Los importes son orientativos y deben verificarse.</p><a class="btn primary full" href="/api/viajes/${t.id_viaje}/plan/pdf" download>↓ Guardar itinerario en PDF</a></aside></div></div>`}
 function v3Payments(){if(!trip()||!state.plan)return v3Landing();const p=state.plan;const gs=state.detail?.gastos||[];return `<div class="v3-shell"><div class="v3-trip-heading"><div><button class="v3-back" data-nav="resumen">← Presupuesto</button><span class="v3-kicker">CONTROL DE PAGOS</span><h1>Gastos que ya pagaste</h1><p>Registro separado del presupuesto previsto para evitar contar el mismo gasto dos veces.</p></div><button class="btn primary" data-action="add-expense">+ Registrar pago real</button></div><section class="v3-panel"><div class="v3-summary-total"><span>Total pagado y registrado</span><strong>${money(p.gastado_real)}</strong></div>${gs.length?gs.map(g=>`<div class="v3-cost-line"><div><strong>${esc(g.concepto)}</strong><small>${dateES(g.fecha)} · ${esc(g.categoria)}</small></div><span>${money(g.monto)}</span><button class="v3-icon-btn" data-action="edit-expense" data-id="${g.id_gasto}">✎</button></div>`).join(''):'<p class="v3-muted-box">Todavía no registras pagos reales. Puedes hacerlo cuando compres boletos, pagues hospedaje o realices un gasto.</p>'}<div class="v3-note">No se suman de nuevo los pagos al costo estimado; solo indican cuánto ya desembolsaste.</div></section></div>`}
 function v3More(){return `<div class="v3-shell"><span class="v3-kicker">HERRAMIENTAS COMPLEMENTARIAS</span><h1>Más opciones</h1><p>Encuentra aquí las funciones avanzadas para mantener la planificación principal sencilla.</p><div class="v3-more-grid">${[['municipios','Por municipio','Lugares y recomendaciones cercanas'],['experiencias','Por actividad','Pesca y actividades especializadas'],['reservas','Reservaciones','Datos de hospedaje y transporte'],['finanzas','Gastos reales','Control de lo que ya pagaste'],['grupo','Viaje en grupo','Integrantes y votaciones'],['ajustes','Configuración','Cuenta y respaldo de datos']].map(([tab,title,sub])=>`<button class="v3-more-card" data-nav="${tab}"><strong>${esc(title)}</strong><small>${esc(sub)}</small><span>→</span></button>`).join('')}</div></div>`}
-function v3Menu(){const d=v3Day();if(!d)return;showModal('¿Qué quieres añadir al día '+(state.dayIndex+1)+'?',`<p class="modal-sub">Elige el tipo de gasto o actividad. Solo verás este formulario cuando lo necesites.</p><div class="v3-menu-grid"><button data-action="v3-add-concept" data-kind="boleto_ida">✈<strong>Boletos de ida</strong><small>Autobús o avión</small></button><button data-action="v3-add-concept" data-kind="boleto_regreso">↩<strong>Boletos de regreso</strong><small>Regreso a casa</small></button><button data-action="v3-add-concept" data-kind="uber">🚕<strong>Uber o taxi</strong><small>Traslados por viaje</small></button><button data-action="v3-add-concept" data-kind="renta_auto">🚙<strong>Rentar auto</strong><small>Costo por día</small></button><button data-action="v3-add-concept" data-kind="gasolina">⛽<strong>Gasolina</strong><small>Combustible para el viaje</small></button><button data-action="v3-add-concept" data-kind="casetas">🛣<strong>Casetas</strong><small>Peajes por carretera</small></button><button data-action="v3-add-concept" data-kind="estacionamiento">🅿<strong>Estacionamiento</strong><small>Costo por día o visita</small></button><button data-action="v3-legacy" data-kind="hospedaje">🏨<strong>Hospedaje</strong><small>Una estancia completa</small></button><button data-action="v3-legacy" data-kind="actividad">🌿<strong>Actividad</strong><small>Visita o experiencia</small></button><button data-action="v3-add-concept" data-kind="otro">＋<strong>Otro gasto</strong><small>Concepto personalizado</small></button></div>`,true)}
+function v3Menu(){TP31.menu()}
 function v3ConceptForm(type,old=null){const day=v3Day();const t=trip();if(!day)return;const food=type in FOOD_LABELS;const labels=food?[FOOD_LABELS[type],'Estimado por persona (MXN)','Puedes dejarlo incluido si el hotel cubre esta comida']:PLANNER_TYPES[type]||PLANNER_TYPES.otro;
 const quantityDefault=type==='renta_auto'?v3NumDays(t):1;
 const personsDefault=(food||type==='boleto_ida'||type==='boleto_regreso')?t.num_viajeros:1;
 const countLabel=type==='renta_auto'?'Días de renta':(type==='boleto_ida'||type==='boleto_regreso'?'Boletos por persona':'Cantidad / viajes');
 showModal((old?'Editar ':'Agregar ')+labels[0],`<form id="v3-concept-form" data-id="${old?.id_concepto||''}" data-type="${esc(type)}"><div class="form-grid"><div class="field full"><label>Nombre o descripción</label><input name="nombre" value="${esc(old?.nombre||labels[0])}" required maxlength="140"></div><div class="field"><label>Día del itinerario</label>${v3DaySelect(old?.fecha||day.fecha)}</div><div class="field"><label>Hora (opcional)</label><input name="hora" type="time" value="${esc(old?.hora||'')}"></div><div class="field"><label>${labels[1]}</label><input type="number" name="precio_unitario" value="${old?.precio_unitario??(food?({desayuno:100,comida:180,cena:140}[type]):0)}" min="0" step="0.01" required></div><div class="field"><label>${countLabel}</label><input name="cantidad" type="number" min="1" step="1" value="${old?.cantidad??quantityDefault}" required></div><div class="field"><label>Personas incluidas en este costo</label><input name="personas" type="number" min="1" max="${t.num_viajeros}" step="1" value="${old?.personas??personsDefault}" required></div><div class="field"><label>¿Está cubierto por otra reserva?</label><select name="incluido"><option value="0" ${!old?.incluido?'selected':''}>No · contar el costo</option><option value="1" ${old?.incluido?'selected':''}>Sí · costo adicional $0</option></select></div><div class="field full"><label>Notas</label><textarea name="nota" maxlength="350">${esc(old?.nota||'')}</textarea></div></div><div class="v3-note">${esc(labels[2])}. Total = precio × cantidad × personas, salvo cuando esté incluido. Importes ilustrativos hasta confirmar tarifas.</div><div class="form-actions">${old&&!old.automatico?`<button type="button" class="btn warn" data-action="v3-remove" data-id="${old.id_concepto}">Eliminar</button>`:''}<button type="button" class="btn outline" data-action="close">Cancelar</button><button class="btn primary" type="submit">Guardar concepto</button></div></form>`,true)}
-function v3RecommendPlace(placeId){const l=placeById(placeId);const p=state.plan;if(!l||!p)return;const perUnit=Number(l.precio_estimado)||0;const groupEstimate=perUnit*p.viaje.num_viajeros;
+function v3RecommendPlace(placeId){return TP31.activities(placeId);}
+function v3RecommendPlaceLegacy(placeId){const l=placeById(placeId);const p=state.plan;if(!l||!p)return;const perUnit=Number(l.precio_estimado)||0;const groupEstimate=perUnit*p.viaje.num_viajeros;
 showModal('Añadir experiencia al itinerario',`<div class="v3-recommend-preview"><div>${placePhoto(l,'')}</div><div><strong>${esc(l.nombre)}</strong><p>${esc(l.categoria)} · ${esc(l.ciudad)}</p><small>Selecciona el día y ajusta el costo total para todo el grupo.</small></div></div><form id="v3-recommend-form" data-place="${esc(placeId)}"><div class="form-grid"><div class="field"><label>¿Qué día quieres visitarlo?</label>${v3DaySelect(v3Day()?.fecha)}</div><div class="field"><label>Hora</label><input type="time" name="hora" value="10:00" required></div><div class="field full"><label>Costo total estimado para el grupo (MXN)</label><input type="number" name="costo" min="0" step="0.01" value="${groupEstimate.toFixed(2)}" required><small>Referencia del catálogo × ${p.viaje.num_viajeros} viajeros; cámbiala según tu situación.</small></div></div><div class="form-actions"><button type="button" class="btn outline" data-action="close">Cancelar</button><button type="submit" class="btn primary">Añadir a ese día →</button></div></form>`,true)}
 async function v3Refresh(){await loadTrips(state.tripId);state.dayIndex=Math.min(state.dayIndex,Math.max(0,v3Days().length-1));render()}
 async function v3Action(action,el){const id=Number(el.dataset.id);if(action==='v3-day'){v3SelectDay(Number(el.dataset.index));return true}
  if(action==='v3-day-from-summary'){v3SelectDay(Number(el.dataset.index));go('planificar');return true}
  if(action==='v3-add-menu'){v3Menu();return true}
- if(action==='v3-add-concept'){v3ConceptForm(el.dataset.kind);return true}
- if(action==='v3-edit'){const old=v3Days().flatMap(d=>d.conceptos).find(x=>x.id_concepto===id);if(old)v3ConceptForm(old.tipo,old);return true}
+ if(action==='v3-add-concept'){if(['boleto_ida','boleto_regreso'].includes(el.dataset.kind)) TP31.ticket(el.dataset.kind);else TP31.transport(el.dataset.kind);return true}
+ if(action==='v3-edit'){const old=v3Days().flatMap(d=>d.conceptos).find(x=>x.id_concepto===id);if(old){if(['desayuno','comida','cena'].includes(old.tipo))TP31.meals(old);else v3ConceptForm(old.tipo,old)}return true}
  if(action==='v3-remove'){if(!confirm('¿Eliminar este gasto previsto?'))return true;await api(`/api/viajes/${state.tripId}/plan/conceptos/${id}`,{method:'DELETE'});closeModal();await v3Refresh();return true}
- if(action==='v3-legacy'){const kind=el.dataset.kind;const d=v3Day();closeModal();if(kind==='actividad')openForm('actividad',null,{id_itinerario:d.id_itinerario});else if(kind==='hospedaje')openForm('hospedaje',null,{fecha_entrada:trip().fecha_inicio,fecha_salida:trip().fecha_fin});return true}
- if(action==='v3-place'){v3RecommendPlace(el.dataset.id);return true}
+ if(action==='v3-legacy'){const kind=el.dataset.kind;const d=v3Day();closeModal();if(kind==='actividad')TP31.activities();else if(kind==='hospedaje')TP31.hotels();return true}
+ if(action==='v3-place'){TP31.activities(el.dataset.id);return true}
  return false}
 async function v3Submit(form){if(form.id==='v3-concept-form'){
  const type=form.dataset.type, id=form.dataset.id, data=Object.fromEntries(new FormData(form).entries());data.tipo=type;data.incluido=Number(data.incluido);data.personas=Number(data.personas);data.cantidad=Number(data.cantidad);data.precio_unitario=Number(data.precio_unitario);
@@ -681,6 +682,30 @@ document.addEventListener('submit',async e=>{
  const f=e.target;if(!['v3-concept-form','v3-config-form','v3-recommend-form'].includes(f.id))return;
  e.preventDefault();e.stopImmediatePropagation();const btn=f.querySelector('[type="submit"]');if(btn)btn.disabled=true;
  try{await v3Submit(f)}catch(err){fail(err);if(btn)btn.disabled=false}
+},true);
+
+
+// TravelPlanner 3.1: selección visual de alternativas para costos estimados.
+document.addEventListener('click', async e=>{
+ const node=e.target.closest('[data-action^="v31-"]');if(!node)return;
+ e.preventDefault();e.stopImmediatePropagation();
+ try{await TP31.handle(node.dataset.action,node)}catch(err){fail(err)}
+},true);
+document.addEventListener('submit',async e=>{
+ if(e.target.id!=='v31-option-form')return;
+ e.preventDefault();e.stopImmediatePropagation();
+ const btn=e.target.querySelector('[type="submit"]');if(btn)btn.disabled=true;
+ try{await TP31.save(e.target)}catch(err){fail(err);if(btn)btn.disabled=false}
+},true);
+document.addEventListener('input',e=>{
+ const f=e.target.closest('#v31-option-form');if(f)TP31.recalc(f);
+},true);
+document.addEventListener('change',e=>{
+ if(e.target.id==='v31-origin'){
+   TP31.status.origin=e.target.value;
+   TP31.ticket(TP31.status.kind);
+ }
+ const f=e.target.closest('#v31-option-form');if(f)TP31.recalc(f);
 },true);
 
 init();
