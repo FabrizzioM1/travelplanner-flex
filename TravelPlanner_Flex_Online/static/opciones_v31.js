@@ -136,13 +136,18 @@ const TP31 = (() => {
   }
  }
  async function nearbyRestaurants(){
-  showModal('Buscando restaurantes', '<p class="modal-sub">Consultando establecimientos registrados en OpenStreetMap cerca de la coordenada de referencia de '+safe(t().destino)+'…</p><div class="v3-muted-box">Si el servicio externo no responde, puedes continuar usando los presupuestos de comida y mercados del catálogo.</div>',true);
+  // Use the location of an activity in the selected day when it is known.
+  // Do not pretend that the geographical centre of a state is the traveller's location.
+  const pickedDay=v3Day();
+  const site=(pickedDay?.actividades||[]).find(a=>a.lat!=null&&a.lon!=null&&Number.isFinite(Number(a.lat))&&Number.isFinite(Number(a.lon)));
+  const near=site?' cerca de '+site.nombre:' cerca de una ubicación de referencia de '+t().destino;
+  showModal('Buscando restaurantes', '<p class="modal-sub">Consultando establecimientos registrados en OpenStreetMap'+safe(near)+'…</p><div class="v3-muted-box">Si el servicio externo no responde, puedes continuar usando los presupuestos de comida y mercados del catálogo.</div>',true);
   let res;
-  try{res=await api('/api/opciones/restaurantes?destino='+encodeURIComponent(t().destino));}
+  try{const query='/api/opciones/restaurantes?destino='+encodeURIComponent(t().destino)+(site?'&lat='+encodeURIComponent(site.lat)+'&lon='+encodeURIComponent(site.lon):'');res=await api(query);}
   catch(err){showModal('No se pudo consultar', '<p>El servicio externo de restaurantes no respondió.</p><button class="btn primary" data-action="v31-back">Volver a las opciones</button>',true);return}
   const opts=(res.resultados||[]).map(r=>({name:r.nombre,desc:'Registrado como '+(r.tipo==='cafe'?'cafetería':r.tipo==='fast_food'?'comida rápida':'restaurante')+' en OpenStreetMap. '+(r.cocina?'Cocina: '+r.cocina+'. ':'')+'Rango general para presupuestar, NO precio de menú.',lo:r.min,hi:r.max,unit:'por persona · referencia',icon:'🍴',url:r.fuente}));
   if(!opts.length){showModal('Sin resultados externos', '<p class="modal-sub">No se recibieron establecimientos verificables desde la fuente externa; esto no significa que no existan restaurantes.</p><button class="btn primary" data-action="v31-back">Ver mercados y otras opciones</button>',true);return}
-  show('Restaurantes registrados cerca de '+t().destino,opts,'meal',res.aviso||'Nombres tomados de OpenStreetMap; verifica horarios, ubicación y menú antes de visitar.');
+  show('Restaurantes registrados'+near,opts,'meal',res.aviso||'Nombres tomados de OpenStreetMap; verifica horarios, ubicación y menú antes de visitar.');
  }
  function activities(placeId=null){
   status.kind='actividad';status.old=null;
