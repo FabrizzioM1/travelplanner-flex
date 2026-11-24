@@ -322,7 +322,7 @@ function input(name,label,type='text',val='',required=false,extra=''){
  `<input name="${name}" type="${type}" value="${esc(val)}" ${required?'required':''} ${type==='number'?'min="0" step="0.01"':''} ${extra}>`;
  return `<div class="field ${type==='textarea'||type==='checkbox'?'full':''}"><label>${esc(label)}${star}</label>${spec}</div>`
 }
-function formModal(title,type,fields,vals={},editId=null,help=''){
+function formModal(title,type,fields,vals={},editId=null,help='',extraHtml=''){
  let linkedField='';
  if(type==='transporte' && state.plan){
    const plan=state.plan;
@@ -333,7 +333,7 @@ function formModal(title,type,fields,vals={},editId=null,help=''){
      (!linked.some(l=>l.id_concepto===x.id_concepto)||Number(x.id_concepto)===Number(selected)));
    linkedField=`<div class="field full"><label>¿Este transporte ya lo habías presupuestado?</label><select name="vincular_concepto_id"><option value="0">No · es un transporte adicional</option>${tickets.map(x=>`<option value="${x.id_concepto}" ${x.id_concepto===selected?'selected':''}>${esc(x.nombre)} · ${dateES(x.fecha)} · ${money(Number(x.precio_unitario)*Number(x.cantidad)*Number(x.personas))}</option>`).join('')}</select><small>Si seleccionas un boleto existente, el presupuesto lo cuenta solo una vez. No vincules servicios distintos.</small></div>`;
  }
- let html=`<p class="modal-sub">${help||'Los campos marcados con * son obligatorios. Puedes editar esta información después.'}</p><form id="editor-form" data-kind="${type}" data-id="${editId??''}"><div class="form-grid">${fields.map(f=>input(f[0],f[1],f[2]||'text',vals[f[0]]??f[3]??'',!!f[4],f[5]||'')).join('')}${linkedField}</div><div class="form-actions"><button type="button" class="btn outline" data-action="close">Cancelar</button><button type="submit" class="btn primary">${editId?'Guardar cambios':'Guardar'} →</button></div></form>`;showModal(title,html)}
+ let html=`<p class="modal-sub">${help||'Los campos marcados con * son obligatorios. Puedes editar esta información después.'}</p><form id="editor-form" data-kind="${type}" data-id="${editId??''}"><div class="form-grid">${fields.map(f=>input(f[0],f[1],f[2]||'text',vals[f[0]]??f[3]??'',!!f[4],f[5]||'')).join('')}${linkedField}</div>${extraHtml}<div class="form-actions"><button type="button" class="btn outline" data-action="close">Cancelar</button><button type="submit" class="btn primary">${editId?'Guardar cambios':'Guardar'} →</button></div></form>`;showModal(title,html)}
 function tripFields(v={}){let today=new Date();let s=v.fecha_inicio||new Date(today.getTime()+8*86400000).toISOString().slice(0,10);let e=v.fecha_fin||new Date(today.getTime()+11*86400000).toISOString().slice(0,10);return [
  ['nombre','Nombre del viaje','text',v.nombre||'Mi próxima aventura',true],['destino','Destino','select',v.destino||state.exploreDestination||state.city||'Veracruz',true,(state.destinations.length?state.destinations: ['Aguascalientes','Baja California','Baja California Sur','Campeche','Chiapas','Chihuahua','Ciudad de México','Coahuila','Colima','Durango','Estado de México','Guanajuato','Guerrero','Hidalgo','Jalisco','Michoacán','Morelos','Nayarit','Nuevo León','Oaxaca','Puebla','Querétaro','Quintana Roo','San Luis Potosí','Sinaloa','Sonora','Tabasco','Tamaulipas','Tlaxcala','Veracruz','Yucatán','Zacatecas']).map(x=>x+':'+x).join('|')],
  ['fecha_inicio','Fecha de inicio','date',s,true],['fecha_fin','Fecha de fin','date',e,true],
@@ -353,7 +353,10 @@ function openForm(type,editId=null,extras={}){
  let d=state.detail,t=trip();if(!t && type!=='viaje'){toast('Primero crea un viaje.',true);return}
  if(type==='viaje'){
    let v=editId?state.trips.find(x=>x.id_viaje===editId):{destino:extras.destino||state.exploreDestination||state.city||'Veracruz'};state.draft=editId?null:{destino:v?.destino||state.exploreDestination||state.city,presupuesto:12000};
-   formModal(editId?'Editar viaje':'Crear un viaje nuevo','viaje',tripFields(v),v||{},editId,'Escoge un destino y comienza a armar tu viaje. La barra inferior resumirá tus elecciones.');renderDock();return
+   const participants=editId&&state.detail?.viaje?.id_viaje===editId?(state.detail.viajeros||[]):[];
+   const participationPanel=editId?`<section class="v34-members"><h3>Integrantes del viaje</h3><p class="tiny muted">Si alguien canceló, usa su botón. Se descontará un viajero y se recalcularán las comidas automáticas. Las reservas ya contratadas deben revisarse manualmente.</p>${participants.length?participants.map(x=>`<div class="v34-member-row"><strong>${esc(x.nombre)}</strong><button class="btn sm outline" type="button" data-action="v34-cancel-participant" data-id="${x.id_viajero}">Ya no viaja</button></div>`).join(''):'<p class="tiny muted">No hay integrantes con nombre registrados. Puedes cambiar el número directamente. Para añadir nombres ve a Más → Viaje en grupo.</p>'}<p class="tiny muted">Si ya hay pagos registrados a nombre de alguien, deberás reasignarlos antes de quitarlo, para conservar el historial.</p></section>`:'';
+   formModal(editId?'Editar viaje':'Crear un viaje nuevo','viaje',tripFields(v),v||{},editId,
+    editId?'Puedes cambiar nombre, destino, fechas, personas y notas. Se conservan los datos del itinerario. Al reducir viajeros, verifica los boletos y las reservas existentes.':'Escoge un destino y comienza a armar tu viaje. La barra inferior resumirá tus elecciones.',participationPanel);renderDock();return
  }
  let original=null,day=null;
  if(type==='hospedaje')original=d.hospedajes.find(x=>x.id_hospedaje===editId);
@@ -390,7 +393,15 @@ async function submitForm(form){let kind=form.dataset.kind,id=form.dataset.id?Nu
  const data=Object.fromEntries(new FormData(form).entries());
  if(kind==='viaje'){
    if(data.fecha_inicio>data.fecha_fin)throw Error('La fecha final no puede ser anterior a la inicial.');if(state.pendingPlaceId&&placeById(state.pendingPlaceId)?.ciudad!==data.destino)throw Error('El destino del viaje debe coincidir con el lugar que seleccionaste.');if(state.pendingRecommendation&&state.exploreDestination!==data.destino)throw Error('El destino del viaje debe coincidir con la recomendación seleccionada.');
-   if(id){await api('/api/viajes/'+id,{method:'PUT',body:data});closeModal();await loadTrips(id);go('planificar');toast('Viaje actualizado.');return}
+   if(id){
+     const before=state.trips.find(x=>x.id_viaje===id);
+     const registered=state.detail?.viaje?.id_viaje===id?(state.detail.viajeros||[]):[];
+     if(before&&Number(data.num_viajeros)<registered.length)throw Error('Tienes '+registered.length+' integrantes registrados. Primero pulsa «Ya no viaja» junto a quien canceló y después ajusta los demás datos.');
+     if(before&&before.destino!==data.destino&&state.detail?.viaje?.id_viaje===id&&((state.detail.dias||[]).some(x=>x.actividades?.length)||(state.detail.hospedajes||[]).length||(state.detail.transportes||[]).length)){
+       if(!confirm('Cambiaste el destino. Las actividades, hoteles y boletos existentes NO se eliminarán ni cambiarán solos. ¿Quieres conservarlos y revisarlos manualmente?'))return;
+     }
+     await api('/api/viajes/'+id,{method:'PUT',body:data});closeModal();await loadTrips(id);state.dayIndex=0;go('planificar');toast('Viaje actualizado. Revisa boletos, hospedaje y aportantes si cambiaste personas o destino.');return
+   }
    else{
      let res=await api('/api/viajes',{method:'POST',body:data});const pendingPlace=state.pendingPlaceId;const pendingRecommendation=state.pendingRecommendation;state.pendingPlaceId=null;state.pendingRecommendation=null;closeModal();await loadTrips(res.id_viaje);state.city=data.destino;
      if(pendingPlace){go('planificar');v3RecommendPlace(pendingPlace);toast('Viaje creado. Elige el día para tu actividad.');return}
@@ -444,7 +455,15 @@ async function chooseAction(action,el){let id=el.dataset.id,tab=el.dataset.nav;t
  if(action==='municipio-explicacion'){state.municipioExplicacion=state.municipioExplicacion===id?null:id;render();return}
  if(action==='newtrip'){openForm('viaje');return}
  if(action==='choose-trip'){await loadTrips(Number(id));state.dayIndex=0;go('planificar');return}
- if(action==='edit-trip'){openForm('viaje',Number(id));return}
+ if(action==='edit-trip'){await loadTrips(Number(id));openForm('viaje',Number(id));return}
+ if(action==='v34-cancel-participant'){
+   const participant=state.detail?.viajeros?.find(x=>Number(x.id_viajero)===Number(id));
+   if(!participant){toast('No se encontró a ese integrante.',true);return}
+   if(!confirm('¿'+participant.nombre+' ya no viajará? El viaje tendrá una persona menos. Se actualizarán las comidas automáticas, pero revisa boletos, hotel y reservas pagadas. Los gastos reales no se borrarán.'))return;
+   const result=await api('/api/viajes/'+state.tripId+'/cancelar-viajero',{method:'POST',body:{id_viajero:Number(id)}});
+   await loadTrips(state.tripId);openForm('viaje',state.tripId);
+   toast(participant.nombre+' ya no participa. Ahora viajan '+result.num_viajeros+'. Revisa boletos, hospedaje y aportantes.');return;
+ }
  if(action==='delete-trip'){
    if(!confirm('¿Eliminar este viaje y todos sus registros? Esta acción NO se puede deshacer.'))return;
    await api('/api/viajes/'+id,{method:'DELETE'});await loadTrips();go('inicio');toast('Viaje eliminado.');return;
@@ -636,7 +655,7 @@ function v3Day(){return v3Days()[Math.min(state.dayIndex,Math.max(0,v3Days().len
 function v3NumDays(t){if(!t)return 1;const a=Date.parse(t.fecha_inicio+'T00:00:00'),b=Date.parse(t.fecha_fin+'T00:00:00');return Math.max(1,Math.round((b-a)/86400000)+1)}
 function v3LineTotal(it){return Number(it?.total)||0}
 function v3DaySelect(val=''){return `<select name="fecha" required>${v3Days().map((d,i)=>`<option value="${esc(d.fecha)}" ${d.fecha===val?'selected':''}>Día ${i+1} · ${dateES(d.fecha)}</option>`).join('')}</select>`}
-function v3Landing(){const trips=state.trips;return `<div class="v3-shell"><div class="v3-welcome"><div><span class="v3-kicker">TU PRÓXIMA AVENTURA</span><h1>Planea fácil.<br>Viaja tranquilo.</h1><p>Crea tu viaje y organiza cada día. Transporte, hospedaje, tres comidas y experiencias; el presupuesto se calcula solo.</p><button class="btn primary" data-action="newtrip">+ Crear un viaje</button></div><div class="v3-welcome-decoration">✈<span>Destino · Fechas · Plan · Presupuesto</span></div></div><section class="v3-section"><div class="v3-section-header"><h2>Mis viajes</h2><span>${trips.length} guardados</span></div>${trips.length?`<div class="v3-trip-grid">${trips.map(t=>`<article class="v3-trip-card"><div><small>${esc(t.destino)} · ${dateES(t.fecha_inicio)} al ${dateES(t.fecha_fin)}</small><h3>${esc(t.nombre)}</h3><p>${v3NumDays(t)} días · ${t.num_viajeros} viajeros</p></div><button class="btn primary" data-action="choose-trip" data-id="${t.id_viaje}">Abrir planificación →</button></article>`).join('')}</div>`:`<div class="v3-blank">Todavía no tienes viajes. Presiona <b>Crear un viaje</b> y empezarás a organizar sus días.</div>`}</section><section class="v3-section"><div class="v3-minibox"><strong>¿Primero quieres inspirarte?</strong><p>Explora los atractivos y selecciona los que más te gusten.</p><button class="btn outline" data-nav="explorar">Descubrir lugares</button></div></section></div>`}
+function v3Landing(){const trips=state.trips;return `<div class="v3-shell"><div class="v3-welcome"><div><span class="v3-kicker">TU PRÓXIMA AVENTURA</span><h1>Planea fácil.<br>Viaja tranquilo.</h1><p>Crea tu viaje y organiza cada día. Transporte, hospedaje, tres comidas y experiencias; el presupuesto se calcula solo.</p><button class="btn primary" data-action="newtrip">+ Crear un viaje</button></div><div class="v3-welcome-decoration">✈<span>Destino · Fechas · Plan · Presupuesto</span></div></div><section class="v3-section"><div class="v3-section-header"><h2>Mis viajes</h2><span>${trips.length} guardados</span></div>${trips.length?`<div class="v3-trip-grid">${trips.map(t=>`<article class="v3-trip-card"><div><small>${esc(t.destino)} · ${dateES(t.fecha_inicio)} al ${dateES(t.fecha_fin)}</small><h3>${esc(t.nombre)}</h3><p>${v3NumDays(t)} días · ${t.num_viajeros} viajeros</p></div><div class="v34-trip-buttons"><button class="btn primary" data-action="choose-trip" data-id="${t.id_viaje}">Abrir planificación →</button><button class="btn outline" data-action="edit-trip" data-id="${t.id_viaje}" aria-label="Editar ${esc(t.nombre)}">✎ Editar viaje</button></div></article>`).join('')}</div>`:`<div class="v3-blank">Todavía no tienes viajes. Presiona <b>Crear un viaje</b> y empezarás a organizar sus días.</div>`}</section><section class="v3-section"><div class="v3-minibox"><strong>¿Primero quieres inspirarte?</strong><p>Explora los atractivos y selecciona los que más te gusten.</p><button class="btn outline" data-nav="explorar">Descubrir lugares</button></div></section></div>`}
 function v3MealRow(item){const incomplete=Number(item.precio_unitario)===0&&!item.incluido;return `<button class="v3-meal ${item.incluido?'is-included':''}" data-action="v3-edit" data-id="${item.id_concepto}" aria-label="Editar ${esc(item.nombre)}"><span class="v3-meal-icon">${item.tipo==='desayuno'?'☕':item.tipo==='comida'?'🍽':'🌙'}</span><span class="v3-meal-content"><strong>${esc(item.nombre)}</strong><small>${item.incluido?'Incluido / sin costo adicional':incomplete?'Monto pendiente · editar':money(item.precio_unitario)+' por persona'}</small></span><b>${money(item.total)}</b><span class="v3-edit-icon">✎</span></button>`}
 function v3GroupItem(type,label,amount,id,detail=''){return `<div class="v3-cost-line"><div><strong>${esc(label)}</strong><small>${esc(detail)}</small></div><span>${money(amount)}</span>${type==='concepto'?`<button class="v3-icon-btn" data-action="v3-edit" data-id="${id}" aria-label="Editar">✎</button>`:''}${type==='actividad'?`<button class="v3-icon-btn" data-action="edit-activity" data-id="${id}" aria-label="Editar">✎</button>`:''}${type==='hospedaje'?`<button class="v3-icon-btn" data-action="edit-hostel" data-id="${id}" aria-label="Editar hospedaje" title="Editar hotel, fechas y costo">✎ Editar</button>`:''}</div>`}
 function v3Planner(){if(!trip()||!state.plan)return v3Landing();const p=state.plan,t=p.viaje,ds=v3Days(),day=v3Day(),n=Math.max(1,ds.length);
@@ -652,7 +671,7 @@ const suggestions=state.catalog.filter(l=>l.ciudad===t.destino&&classifyPlace(l)
 const otherLines=[...other.map(x=>v3GroupItem('concepto',x.nombre,x.total,x.id_concepto,PLANNER_TYPES[x.tipo]?.[0]||x.tipo)),
  ...day.hospedajes.map(x=>v3GroupItem('hospedaje','Hospedaje: '+x.nombre,x.costo,x.id_hospedaje,'Costo de estancia total, contado una sola vez')),
  ...day.transportes.map(x=>v3GroupItem('transporte','Transporte: '+x.origen+' → '+x.destino,x.costo,x.id_transporte,'Monto total de la reserva'))];
-return `<div class="v3-shell"><div class="v3-trip-heading"><div><button class="v3-back" data-nav="inicio">← Mis viajes</button><span class="v3-kicker">PLANIFICACIÓN DEL VIAJE</span><h1>${esc(t.nombre)}</h1><p>${esc(t.destino)} · ${dateES(t.fecha_inicio)} – ${dateES(t.fecha_fin)} · ${t.num_viajeros} viajeros</p></div><button class="btn primary" data-nav="resumen">Ver resumen →</button></div>
+return `<div class="v3-shell"><div class="v3-trip-heading"><div><button class="v3-back" data-nav="inicio">← Mis viajes</button><span class="v3-kicker">PLANIFICACIÓN DEL VIAJE</span><h1>${esc(t.nombre)}</h1><p>${esc(t.destino)} · ${dateES(t.fecha_inicio)} – ${dateES(t.fecha_fin)} · ${t.num_viajeros} viajeros</p></div><div class="v34-trip-buttons"><button class="btn outline" data-action="edit-trip" data-id="${t.id_viaje}">✎ Editar viaje</button><button class="btn primary" data-nav="resumen">Ver resumen →</button></div></div>
 <div class="v3-steps"><span class="active">1 · Organizar días</span><span>2 · Revisar costos</span><span>3 · Compartir PDF</span></div>
 <div class="v3-day-tabs" role="tablist" aria-label="Días del viaje">${ds.map((d,i)=>`<button class="${state.dayIndex===i?'current':''}" data-action="v3-day" data-index="${i}" role="tab" aria-selected="${state.dayIndex===i}"><strong>Día ${i+1}</strong><small>${dateES(d.fecha)}</small></button>`).join('')}</div>
 <div class="v3-plan-grid"><div class="v3-main-plan">
