@@ -4,7 +4,7 @@
 'use strict';
 const TP31 = (() => {
  const GEO = {"Aguascalientes": [21.8853, -102.2916], "Baja California": [32.5149, -117.0382], "Baja California Sur": [22.8905, -109.9167], "Campeche": [19.8301, -90.5349], "Chiapas": [16.7516, -93.1029], "Chihuahua": [28.6353, -106.0889], "Ciudad de México": [19.4326, -99.1332], "Coahuila": [25.4383, -100.9737], "Colima": [19.2452, -103.7241], "Durango": [24.0277, -104.6532], "Estado de México": [19.257, -99.6557], "Guanajuato": [21.019, -101.2574], "Guerrero": [16.8531, -99.8237], "Hidalgo": [20.1011, -98.7591], "Jalisco": [20.6597, -103.3496], "Michoacán": [19.7008, -101.1844], "Morelos": [18.9242, -99.2216], "Nayarit": [21.5042, -104.8946], "Nuevo León": [25.6866, -100.3161], "Oaxaca": [17.0654, -96.7237], "Puebla": [19.0414, -98.2063], "Querétaro": [20.5888, -100.3899], "Quintana Roo": [21.1619, -86.8515], "San Luis Potosí": [22.1565, -100.9855], "Sinaloa": [23.2494, -106.4111], "Sonora": [29.0729, -110.9559], "Tabasco": [17.9895, -92.9475], "Tamaulipas": [23.7369, -99.1411], "Tlaxcala": [19.3139, -98.2404], "Veracruz": [19.1738, -96.1342], "Yucatán": [20.9674, -89.5926], "Zacatecas": [22.7709, -102.5832]};
- const status = {mode:'', options:[], date:'', old:null, kind:'', origin:'', search:''};
+ const status = {mode:'', options:[], date:'', old:null, kind:'', origin:'', search:'', replaceId:null};
  const m=n=>money(n);
  const safe=s=>esc(s);
  const midpoint=(lo,hi)=>Math.round(((Number(lo)+Number(hi))/2)/10)*10;
@@ -54,11 +54,25 @@ const TP31 = (() => {
   const other={gasolina:[{name:'Combustible urbano',desc:'Una provisión para recorrido moderado. Ajusta según distancia y consumo.',lo:250,hi:600,unit:'por vehículo',icon:'⛽'},{name:'Carretera / excursiones',desc:'Trayectos largos. Ajusta al consumo del vehículo.',lo:550,hi:1500,unit:'por vehículo',icon:'⛽'}],casetas:[{name:'Peajes del trayecto',desc:'Provisión provisional; comprueba la ruta y autopistas reales.',lo:100,hi:650,unit:'por vehículo',icon:'🛣'},{name:'Ruta de peaje larga',desc:'Provisión para varios peajes y regreso; revisa si es ida y vuelta.',lo:600,hi:1900,unit:'por vehículo',icon:'🛣'}],otro:[{name:'Otros imprevistos',desc:'Concepto editable.',lo:100,hi:500,unit:'por grupo',icon:'＋'}]};
   show(type==='renta_auto'?'Elige automóvil':type==='uber'?'Compara traslados':type==='gasolina'?'Estimación de gasolina':type==='casetas'?'Previsión de casetas':'Otro gasto',type==='renta_auto'?rent:type==='uber'?uber:other[type]||other.otro,'concept','El importe que elijas se guardará como una previsión editable, sin contratar nada.');
  }
- function hotels(){status.kind='hospedaje';status.old=null;show('Opciones para hospedarte',[
+ function hotels(replaceId=null){
+  status.kind='hospedaje';status.old=null;status.replaceId=replaceId;
+  show('Opciones para hospedarte',[
    {name:'Habitación económica',desc:'Estimación por habitación y noche. No corresponde a un hotel reservado.',lo:550,hi:950,unit:'por habitación / noche',icon:'🛏',url:'https://www.booking.com/'},
    {name:'Hotel de gama media',desc:'Tarifa orientativa por habitación y noche; confirmar impuestos y desayuno.',lo:900,hi:1650,unit:'por habitación / noche',icon:'🏨',url:'https://www.booking.com/'},
    {name:'Hotel familiar o boutique',desc:'Revisar capacidad real por habitación y política de menores.',lo:1450,hi:2800,unit:'por habitación / noche',icon:'🏩',url:'https://www.booking.com/'},
- ],'hotel',`Se presupuestan ${nights()} noches. Podrás ajustar número de habitaciones y tarifa real.`)}
+  ],'hotel',`Se presupuestan ${nights()} noches. Puedes editar el alojamiento, cambiar de opción o añadir otra estancia.`);
+  const existing=state.detail?.hospedajes||[];
+  if(existing.length){
+   const html='<section class="v32-lodging-existing"><strong>🏨 Hospedaje ya guardado</strong><p>Editar no añade otro hotel ni duplica tu presupuesto.</p>'+existing.map(h=>`<div class="v32-lodging-row"><span>${safe(h.nombre)} · ${m(h.costo)} · ${safe(h.estado)}</span><button class="btn sm outline" data-action="edit-hostel" data-id="${h.id_hospedaje}">✎ Editar</button>${h.estado==='pendiente'&&!h.num_reservacion?`<button class="btn sm soft" data-action="v31-replace-hotel" data-id="${h.id_hospedaje}">Cambiar opción</button>`:''}</div>`).join('')+'</section>';
+   document.querySelector('.modal .v31-options')?.insertAdjacentHTML('beforebegin',html);
+  }
+  if(replaceId){
+   const h=existing.find(x=>x.id_hospedaje===Number(replaceId));
+   if(!h||h.estado!=='pendiente'||h.num_reservacion)throw Error('Sólo puedes sustituir una estimación sin reserva. Para otro caso usa Editar.');
+   document.querySelector('.modal .v31-options')?.insertAdjacentHTML('beforebegin',`<div class="v32-hotel-replace-note">Cambiarás la estimación de <b>${safe(h.nombre)}</b>; no se agregará otro hotel.</div>`);
+  }
+ }
+
  function meals(old=null){
   status.old=old;status.kind=old?.tipo||'comida';
   const typ=status.kind,place=t().destino;
@@ -122,9 +136,15 @@ const TP31 = (() => {
   if(p.fecha<t().fecha_inicio||p.fecha>t().fecha_fin)throw Error('Día fuera de las fechas del viaje.');
   if(isHotel){
     const existing=state.detail?.hospedajes||[];
-    if(existing.length&&!confirm('Ya registraste alojamiento. Si agregas otro, el presupuesto sumará ambas estancias. ¿Quieres continuar?'))return;
+    const replace=existing.find(x=>x.id_hospedaje===Number(status.replaceId));
     const data={id_viaje:state.tripId,nombre:p.nombre+' (presupuesto, sin reserva)',direccion:'Alojamiento a confirmar',fecha_entrada:t().fecha_inicio,fecha_salida:t().fecha_fin,costo:Math.round(price*quantity*100)/100,num_reservacion:'',estado:'pendiente'};
-    await api('/api/hospedaje',{method:'POST',body:data});
+    if(replace){
+      if(replace.estado!=='pendiente'||replace.num_reservacion)throw Error('No se puede sustituir una reservación confirmada. Selecciona Editar.');
+      await api('/api/hospedaje/'+replace.id_hospedaje,{method:'PUT',body:{nombre:data.nombre,costo:data.costo}});
+    }else{
+      if(existing.length&&!confirm('Ya tienes alojamiento. Agregar otro sumará ambas estancias; si quieres cambiar la opción anterior usa «Cambiar opción». ¿Agregar uno nuevo?'))return;
+      await api('/api/hospedaje',{method:'POST',body:data});
+    }
   } else if(isActivity){
     const idx=days().find(d=>d.fecha===p.fecha);if(!idx)throw Error('Día no disponible.');
     let cost=Math.round(price*quantity*people*100)/100;
@@ -155,6 +175,7 @@ const TP31 = (() => {
     return;
   }
   if(action==='v31-pick')return pick(el.dataset.id);
+  if(action==='v31-replace-hotel')return hotels(Number(el.dataset.id));
   if(action==='v31-restaurants')return await nearbyRestaurants();
   if(action==='v31-back'){
     if(status.mode==='ticket')ticket(status.kind);
