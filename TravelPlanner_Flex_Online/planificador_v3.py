@@ -45,6 +45,19 @@ def create_plan_schema(db):
       reserva_pct DOUBLE PRECISION NOT NULL DEFAULT 15 CHECK(reserva_pct >= 0 AND reserva_pct <= 50)
     )''')
     db.execute('CREATE INDEX IF NOT EXISTS idx_plan_concepto_viaje_fecha ON plan_concepto(id_viaje, fecha)')
+    db.execute(f'''CREATE TABLE IF NOT EXISTS plan_vinculo (
+      id_vinculo {ident},
+      id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+      id_concepto INTEGER NOT NULL UNIQUE REFERENCES plan_concepto(id_concepto) ON DELETE CASCADE,
+      tipo TEXT NOT NULL CHECK(tipo IN ('transporte')),
+      id_registro INTEGER NOT NULL,
+      UNIQUE(tipo,id_registro)
+    )''')
+    db.execute('''CREATE TABLE IF NOT EXISTS plan_aportante (
+      id_viaje INTEGER NOT NULL REFERENCES viaje(id_viaje) ON DELETE CASCADE,
+      id_viajero INTEGER NOT NULL REFERENCES viajero(id_viajero) ON DELETE CASCADE,
+      PRIMARY KEY(id_viaje,id_viajero)
+    )''')
 
 
 def money_value(v):
@@ -80,57 +93,227 @@ def ensure_trip_plan(db, trip_info):
                             'Referencia editable por persona, NO precio verificado.'))
 
 
+
+
+def reconcile_trip_plan(db, previous, edited, rows):
+    """Prepare user-approved new dates/count, preserving all manual itinerary data.
+
+    When shrinking dates we only delete default unedited automatically generated meals and
+    blank auto-created days. Manual data and customized meals block the edit with a clear message.
+    The enclosing application transaction rolls back everything if validation fails.
+    """
+    tid=int(previous['id_viaje'])
+    old_from=date.fromisoformat(previous['fecha_inicio'])
+    old_to=date.fromisoformat(previous['fecha_fin'])
+    start=date.fromisoformat(edited['fecha_inicio'])
+    end=date.fromisoformat(edited['fecha_fin'])
+    count=int(edited['num_viajeros'])
+    if (end-start).days >= 60 or count<1 or count>100:
+        raise ValueError('El viaje admite de 1 a 60 días y de 1 a 100 viajeros.')
+    ensure_trip_plan(db, previous)
+    def out(d):return d<edited['fecha_inicio'] or d>edited['fecha_fin']
+    user_entries=rows(db,"SELECT id_concepto,fecha,tipo,nombre,hora,precio_unitario,cantidad,personas,incluido,automatico,nota FROM plan_concepto WHERE id_viaje=?",(tid,))
+    def default_meal(item):
+        original=dict(DEFAULT_MEALS).get(item['tipo'])
+        return bool(item['automatico'] and original is not None
+            and item['nombre']==TYPE_LABELS[item['tipo']]
+            and float(item['precio_unitario'])==original and float(item['cantidad'])==1
+            and int(item['personas'])==int(previous['num_viajeros'])
+            and not int(item['incluido']) and not item['hora']
+            and item['nota']=='Referencia editable por persona, NO precio verificado.')
+    outside=[x for x in user_entries if out(x['fecha'])]
+    protected=[x for x in outside if not default_meal(x)]
+    if protected:
+        raise ValueError(f'Hay {len(protected)} conceptos personalizados fuera de las fechas nuevas. Mueve o elimina esos conceptos antes de acortar el viaje.')
+    conflict_counts={}
+    checks={
+        'actividades':("SELECT COUNT(*) FROM actividad a JOIN itinerario i ON i.id_itinerario=a.id_itinerario WHERE i.id_viaje=? AND (i.fecha<? OR i.fecha>?)",(tid,edited['fecha_inicio'],edited['fecha_fin'])),
+        'reservas de hotel':('SELECT COUNT(*) FROM hospedaje WHERE id_viaje=? AND (fecha_entrada<? OR fecha_salida>?)',(tid,edited['fecha_inicio'],(end+timedelta(days=1)).isoformat())),
+        'boletos/transporte':('SELECT COUNT(*) FROM transporte WHERE id_viaje=? AND (substr(fecha_hora_salida,1,10)<? OR substr(fecha_hora_salida,1,10)>?)',(tid,edited['fecha_inicio'],edited['fecha_fin'])),
+        'gastos reales':('SELECT COUNT(*) FROM gasto WHERE id_viaje=? AND (fecha<? OR fecha>?)',(tid,edited['fecha_inicio'],edited['fecha_fin']))
+    }
+    for label,(sql,args) in checks.items():
+        n=db.execute(sql,args).fetchone()[0]
+        if n:conflict_counts[label]=int(n)
+    import re
+    all_days=rows(db,'SELECT id_itinerario,fecha,titulo,descripcion FROM itinerario WHERE id_viaje=?',(tid,))
+    custom_days=[d for d in all_days if out(d['fecha']) and
+                 (bool(d['descripcion']) or not re.fullmatch(r'Día \d+',d['titulo'] or ''))]
+    if custom_days:conflict_counts['días personalizados']=len(custom_days)
+    if conflict_counts:
+        details=', '.join(f'{name}: {qty}' for name,qty in conflict_counts.items())
+        raise ValueError('Antes de cambiar las fechas revisa registros que quedarían fuera: '+details+'. No se eliminó ningún dato.')
+    # Count can't be reduced below number of travelers with a registered assigned concept.
+    bad_people=[x for x in user_entries if not out(x['fecha']) and int(x['personas'])>count and not default_meal(x)]
+    if bad_people:
+        raise ValueError(f'Hay {len(bad_people)} conceptos personalizados para más de {count} viajeros. Edita sus participantes primero.')
+    if start!=old_from or end!=old_to:
+        for item in outside:
+            db.execute('DELETE FROM plan_concepto WHERE id_concepto=?',(item['id_concepto'],))
+        db.execute('DELETE FROM itinerario WHERE id_viaje=? AND (fecha<? OR fecha>?)',(tid,edited['fecha_inicio'],edited['fecha_fin']))
+        # Renumber autogenerated day headings for dates that survive a shift.
+        surviving=rows(db,'SELECT id_itinerario,fecha,titulo,descripcion FROM itinerario WHERE id_viaje=?',(tid,))
+        for day in surviving:
+            if not day['descripcion'] and re.fullmatch(r'Día \d+',day['titulo'] or ''):
+                new_number=(date.fromisoformat(day['fecha'])-start).days+1
+                db.execute('UPDATE itinerario SET titulo=? WHERE id_itinerario=?',(f'Día {new_number}',day['id_itinerario']))
+    if count!=int(previous['num_viajeros']):
+        registered=db.execute('SELECT COUNT(*) FROM viajero WHERE id_viaje=?',(tid,)).fetchone()[0]
+        selected=db.execute('SELECT COUNT(*) FROM plan_aportante WHERE id_viaje=?',(tid,)).fetchone()[0]
+        if registered>count or selected>count:
+            raise ValueError(f'El viaje tiene {registered} integrantes identificados y {selected} aportantes elegidos. Ajusta esas listas antes de cambiar a {count} viajeros.')
+        # Update untouched automatic meals; leave individually configured food items alone.
+        for item in user_entries:
+            if not out(item['fecha']) and default_meal(item):
+                db.execute('UPDATE plan_concepto SET personas=? WHERE id_concepto=?',(count,item['id_concepto']))
+        db.execute('UPDATE plan_configuracion SET pagadores=CASE WHEN pagadores>? THEN ? ELSE pagadores END WHERE id_viaje=?',(count,count,tid))
+    return {'ok':True,'fecha_inicio':edited['fecha_inicio'],'fecha_fin':edited['fecha_fin']}
+
+
+def set_ticket_link(db, tid, entity_id, concept_id, rows):
+    """Explicitly link a booked transport with its planned ticket, no guesswork."""
+    tid=int(tid);entity_id=int(entity_id)
+    booking=rows(db,'SELECT id_transporte,fecha_hora_salida FROM transporte WHERE id_transporte=? AND id_viaje=?',(entity_id,tid))
+    if not booking:raise ValueError('La reserva de transporte no pertenece al viaje.')
+    db.execute("DELETE FROM plan_vinculo WHERE tipo='transporte' AND id_registro=? AND id_viaje=?",(entity_id,tid))
+    if not concept_id or str(concept_id)=='0':return
+    item=rows(db,"SELECT id_concepto,tipo,fecha FROM plan_concepto WHERE id_concepto=? AND id_viaje=?",(int(concept_id),tid))
+    if not item or item[0]['tipo'] not in ('boleto_ida','boleto_regreso'):
+        raise ValueError('Solo puedes vincular boletos presupuestados del mismo viaje.')
+    if item[0]['fecha']!=booking[0]['fecha_hora_salida'][:10]:
+        raise ValueError('El boleto y la reserva deben salir el mismo día para vincularse. Corrige primero la fecha.')
+    existing=rows(db,'SELECT id_vinculo FROM plan_vinculo WHERE id_concepto=?',(int(concept_id),))
+    if existing:raise ValueError('Ese boleto previsto ya está vinculado a otra reserva.')
+    db.execute('INSERT INTO plan_vinculo(id_viaje,id_concepto,tipo,id_registro) VALUES (?,?,?,?)',
+               (tid,int(concept_id),'transporte',entity_id))
+
+
+def set_plan_payers(db, tid, traveler_ids, rows):
+    if not isinstance(traveler_ids,list):raise ValueError('Selecciona una lista de aportantes.')
+    try:ids=list(dict.fromkeys(int(x) for x in traveler_ids))
+    except (ValueError,TypeError):raise ValueError('Identificador de aportante inválido.')
+    if not ids:raise ValueError('Selecciona al menos un aportante.')
+    trip_size=db.execute('SELECT num_viajeros FROM viaje WHERE id_viaje=?',(tid,)).fetchone()
+    if not trip_size or len(ids)>int(trip_size[0]):raise ValueError('El número de aportantes no puede superar el de viajeros.')
+    all_travelers={x['id_viajero'] for x in rows(db,'SELECT id_viajero FROM viajero WHERE id_viaje=?',(tid,))}
+    if not set(ids)<=all_travelers:raise ValueError('Solo puedes seleccionar integrantes del mismo viaje.')
+    db.execute('DELETE FROM plan_aportante WHERE id_viaje=?',(tid,))
+    for traveler_id in ids:
+        db.execute('INSERT INTO plan_aportante(id_viaje,id_viajero) VALUES (?,?)',(tid,traveler_id))
+    db.execute('UPDATE plan_configuracion SET pagadores=? WHERE id_viaje=?',(len(ids),tid))
+    return ids
+
+
 def calculated_plan(db, trip_info, rows):
     ensure_trip_plan(db,trip_info)
     tid=trip_info['id_viaje']
     items=rows(db,'SELECT * FROM plan_concepto WHERE id_viaje=? ORDER BY fecha,hora,id_concepto',(tid,))
-    days=rows(db,'SELECT * FROM itinerario WHERE id_viaje=? ORDER BY fecha',(tid,))
+    days=rows(db,'SELECT * FROM itinerario WHERE id_viaje=? AND fecha>=? AND fecha<=? ORDER BY fecha',
+              (tid,trip_info['fecha_inicio'],trip_info['fecha_fin']))
     hotels=rows(db,'SELECT * FROM hospedaje WHERE id_viaje=? ORDER BY fecha_entrada',(tid,))
     transports=rows(db,'SELECT * FROM transporte WHERE id_viaje=? ORDER BY fecha_hora_salida',(tid,))
-    activities=rows(db,"""SELECT a.*,i.fecha FROM actividad a JOIN itinerario i ON i.id_itinerario=a.id_itinerario
-                      WHERE i.id_viaje=? AND a.estado!='cancelada' ORDER BY i.fecha,a.hora_inicio""",(tid,))
-    # Real spending stays separate: planned cost is not a payment.
+    activities=rows(db,"""SELECT a.*,i.fecha,l.lat,l.lon,l.nombre AS nombre_lugar FROM actividad a
+                          JOIN itinerario i ON i.id_itinerario=a.id_itinerario
+                          LEFT JOIN lugar l ON l.id_lugar=a.lugar_id
+                          WHERE i.id_viaje=? AND a.estado!='cancelada' ORDER BY i.fecha,a.hora_inicio""",(tid,))
+    links=rows(db,'SELECT * FROM plan_vinculo WHERE id_viaje=?',(tid,))
+    by_concept={x['id_concepto']:x for x in links}
     real=db.execute('SELECT COALESCE(SUM(monto),0) FROM gasto WHERE id_viaje=?',(tid,)).fetchone()[0]
     cfg=rows(db,'SELECT * FROM plan_configuracion WHERE id_viaje=?',(tid,))[0]
+    travelers=rows(db,'SELECT id_viajero,nombre FROM viajero WHERE id_viaje=? ORDER BY id_viajero',(tid,))
+    explicitly_selected=rows(db,'SELECT id_viajero FROM plan_aportante WHERE id_viaje=?',(tid,))
+    selected_ids={int(x['id_viajero']) for x in explicitly_selected}
+    max_payers=max(1,int(trip_info['num_viajeros']))
+    if explicitly_selected:
+        payers=min(len(selected_ids),max_payers)
+        selected_travelers=[x for x in travelers if x['id_viajero'] in selected_ids]
+    else:
+        payers=min(int(cfg['pagadores']),max_payers)
+        selected_travelers=travelers[:payers]
     categories={'alimentacion':0., 'ida_y_regreso':0., 'transporte_local':0., 'hospedaje':0., 'actividades':0., 'otros':0.}
-    daily={d['fecha']: {'fecha':d['fecha'],'id_itinerario':d['id_itinerario'], 'titulo':d['titulo'],
-                        'conceptos':[], 'actividades':[], 'hospedajes':[], 'transportes':[], 'subtotal':0.0}
+    minimum={key:0. for key in categories};maximum={key:0. for key in categories}
+    daily={d['fecha']:{'fecha':d['fecha'],'id_itinerario':d['id_itinerario'],'titulo':d['titulo'],
+                        'conceptos':[],'actividades':[],'hospedajes':[],'transportes':[], 'subtotal':0.}
            for d in days}
-    def add_daily(fecha, category, amount):
+    alerts=[]
+    def add_daily(fecha,category,amount,low=None,high=None):
+        amount=float(amount)
         categories[category]+=amount
-        if fecha in daily: daily[fecha]['subtotal']+=amount
-    for it in items:
-        total=0. if it['incluido'] else round(float(it['precio_unitario'])*float(it['cantidad'])*int(it['personas']),2)
-        it['total']=total
-        if it['tipo'] in FOOD_TYPES: category='alimentacion'
-        elif it['tipo'] in ('boleto_ida','boleto_regreso'): category='ida_y_regreso'
-        elif it['tipo'] in TRAVEL_TYPES: category='transporte_local'
-        else: category='otros'
-        add_daily(it['fecha'],category,total)
-        if it['fecha'] in daily: daily[it['fecha']]['conceptos'].append(it)
+        minimum[category]+=float(amount if low is None else low)
+        maximum[category]+=float(amount if high is None else high)
+        if fecha in daily:daily[fecha]['subtotal']+=amount
+        elif amount>0:alerts.append({'tipo':'fuera_de_rango','texto':f'Hay ${amount:,.2f} MXN en {category} con fecha {fecha} fuera del viaje.'})
+    import re
+    for item in items:
+        gross=round(float(item['precio_unitario'])*float(item['cantidad'])*int(item['personas']),2)
+        linked=item['id_concepto'] in by_concept
+        total=0. if item['incluido'] or linked else gross
+        item['total']=total
+        item['vinculado']=linked
+        if item['tipo'] in FOOD_TYPES:cat='alimentacion'
+        elif item['tipo'] in ('boleto_ida','boleto_regreso'):cat='ida_y_regreso'
+        elif item['tipo'] in TRAVEL_TYPES:cat='transporte_local'
+        else:cat='otros'
+        low=high=total
+        # ONLY ranges supplied by the user-facing selection options; not live quotes.
+        match=re.search(r'Rango orientativo:\s*([0-9.,]+)[–-]([0-9.,]+)',item['nota'] or '')
+        if match and not linked and not item['incluido']:
+            try:
+                low=float(match.group(1).replace(',',''))*float(item['cantidad'])*int(item['personas'])
+                high=float(match.group(2).replace(',',''))*float(item['cantidad'])*int(item['personas'])
+                low=min(low,total);high=max(high,total)
+            except ValueError:low=high=total
+        add_daily(item['fecha'],cat,total,low,high)
+        if item['fecha'] in daily:daily[item['fecha']]['conceptos'].append(item)
     for a in activities:
         total=float(a['costo_estimado'] or 0)
         add_daily(a['fecha'],'actividades',total)
-        if a['fecha'] in daily: daily[a['fecha']]['actividades'].append(a)
+        if a['fecha'] in daily:daily[a['fecha']]['actividades'].append(a)
     for h in hotels:
         total=float(h['costo'] or 0)
-        # Entire reservation priced only once (not on every night).
         add_daily(h['fecha_entrada'],'hospedaje',total)
-        if h['fecha_entrada'] in daily: daily[h['fecha_entrada']]['hospedajes'].append(h)
+        if h['fecha_entrada'] in daily:daily[h['fecha_entrada']]['hospedajes'].append(h)
     for tr in transports:
         total=float(tr['costo'] or 0)
-        firstday=tr['fecha_hora_salida'][:10]
-        add_daily(firstday,'ida_y_regreso',total)
-        if firstday in daily: daily[firstday]['transportes'].append(tr)
-    subtotal=round(sum(categories.values()),2)
-    recommended=round(subtotal*(1+float(cfg['reserva_pct'])/100),2)
-    payers=min(int(cfg['pagadores']),max(1,int(trip_info['num_viajeros'])))
+        travel_day=tr['fecha_hora_salida'][:10]
+        add_daily(travel_day,'ida_y_regreso',total)
+        if travel_day in daily:daily[travel_day]['transportes'].append(tr)
+    for day in daily.values():
+        # Only schedules with a known arrival and start time can be compared reliably.
+        for tr in day['transportes']:
+            arrival=(tr.get('fecha_hora_llegada') or '')[:16]
+            if not arrival:continue
+            for a in day['actividades']:
+                when=day['fecha']+'T'+str(a['hora_inicio'])[:5]
+                if when<arrival:
+                    alerts.append({'tipo':'horario','texto':f'{a["nombre"]} empieza antes de llegar el transporte {tr["origen"]} → {tr["destino"]}.'})
+        active=sorted(day['actividades'],key=lambda a:a['hora_inicio'])
+        for a,b in zip(active,active[1:]):
+            try:
+                ah,am=map(int,a['hora_inicio'][:5].split(':'))
+                bh,bm=map(int,b['hora_inicio'][:5].split(':'))
+                if ah*60+am+int(a['duracion_min'] or 0)>bh*60+bm:
+                    alerts.append({'tipo':'horario','texto':f'Actividades encimadas el {day["fecha"]}: {a["nombre"]} y {b["nombre"]}.'})
+            except (ValueError,TypeError):pass
+    if not any(x['tipo']=='boleto_regreso' for x in items) and not any('regres' in str(t['origen']).lower() or 'regres' in str(t['destino']).lower() for t in transports):
+        alerts.append({'tipo':'pendiente','texto':'No hay boleto de regreso identificado. Confirma cómo volverás a casa.'})
+    if not hotels and len(daily)>1:
+        alerts.append({'tipo':'pendiente','texto':'No hay hospedaje registrado para las noches del viaje.'})
+    amount=round(sum(categories.values()),2)
+    total_min=round(sum(minimum.values()),2)
+    total_max=round(sum(maximum.values()),2)
+    recommended=round(amount*(1+float(cfg['reserva_pct'])/100),2)
+    if amount>0 and len(selected_travelers)<payers:
+        alerts.append({'tipo':'aportantes','texto':'Se divide entre la cantidad seleccionada; agrega los nombres de aportantes para asignar personas concretas.'})
     return {'viaje':trip_info,'dias':list(daily.values()),'config':cfg,
             'categorias':{k:round(v,2) for k,v in categories.items()},
-            'subtotal':subtotal,'fondo_imprevistos':round(recommended-subtotal,2),
+            'escenarios':{'minimo':total_min,'estimado':amount,'maximo':total_max,
+                          'metodo':'Rangos declarados en las opciones; importes sin rango se mantienen constantes. No son cotizaciones.'},
+            'alertas_plan':alerts, 'vinculos':links,'viajeros':travelers,'aportantes':selected_travelers,
+            'subtotal':amount,'fondo_imprevistos':round(recommended-amount,2),
             'total_recomendado':recommended,'pagadores':payers,
             'aporte_por_pagador':round(recommended/payers,2),'gastado_real':round(float(real or 0),2),
-            'aviso':'Importes ilustrativos y editables; verifica precios reales. Los gastos pagados se muestran por separado.'}
+            'aviso':'Estimados editables; las reservas vinculadas se suman una sola vez y los pagos reales se muestran aparte.'}
 
 
 def register_planner(app,connect,trip,rows,UserError):
@@ -215,8 +398,21 @@ def register_planner(app,connect,trip,rows,UserError):
             except (ValueError,TypeError) as err: raise UserError(str(err) or 'Configuración inválida.')
             if not 1 <= pagadores <= int(t['num_viajeros']): raise UserError('Los aportantes deben ser entre 1 y el total de viajeros.')
             if percent>50: raise UserError('El margen para imprevistos debe ser 0–50%.')
+            current=db.execute('SELECT pagadores FROM plan_configuracion WHERE id_viaje=?',(tid,)).fetchone()
             db.execute('UPDATE plan_configuracion SET pagadores=?,reserva_pct=? WHERE id_viaje=?',(pagadores,percent,tid))
+            # Changing only the contingency percentage must not erase named payers.
+            if current and int(current[0])!=pagadores:
+                db.execute('DELETE FROM plan_aportante WHERE id_viaje=?',(tid,))
             return jsonify({'ok':True})
+
+    @app.put('/api/viajes/<int:tid>/plan/aportantes')
+    def api_plan_payers(tid):
+        p=request.get_json(silent=True) or {}
+        with connect() as db:
+            need_trip(db,tid)
+            try: selected=set_plan_payers(db,tid,p.get('ids'),rows)
+            except ValueError as exc:raise UserError(str(exc))
+        return jsonify({'ok':True,'ids':selected})
 
     @app.get('/api/viajes/<int:tid>/plan/pdf')
     def api_plan_pdf(tid):
@@ -246,13 +442,13 @@ def register_planner(app,connect,trip,rows,UserError):
             items=[]
             for it in day['conceptos']:
                 suffix=' (incluido, $0)' if it['incluido'] else ''
-                items.append((TYPE_LABELS.get(it['tipo'],it['tipo'])+' · '+it['nombre']+suffix,it['total']))
+                items.append(((it.get('hora')+' · ' if it.get('hora') else '')+TYPE_LABELS.get(it['tipo'],it['tipo'])+' · '+it['nombre']+(' (registrado en reservación; sin duplicar)' if it.get('vinculado') else '')+suffix,it['total']))
             for a in day['actividades']:
-                items.append(('Actividad: '+a['nombre'],a['costo_estimado']))
+                items.append(('Actividad: '+str(a.get('hora_inicio') or '')+' · '+a['nombre']+(' · '+str(a.get('lugar') or '') if a.get('lugar') else ''),a['costo_estimado']))
             for h in day['hospedajes']:
-                items.append(('Hospedaje: '+h['nombre']+' (estancia total)',h['costo']))
+                items.append(('Hospedaje: '+h['nombre']+' · '+str(h.get('direccion') or 'Dirección por confirmar')+' · '+h['fecha_entrada']+' a '+h['fecha_salida']+' (estancia total)',h['costo']))
             for tr in day['transportes']:
-                items.append(('Transporte: '+tr['origen']+' a '+tr['destino'],tr['costo']))
+                items.append(('Transporte: '+tr['origen']+' a '+tr['destino']+' · Sale '+str(tr['fecha_hora_salida'])+' · Llega '+str(tr.get('fecha_hora_llegada') or 'por confirmar'),tr['costo']))
             if items:
                 rows_pdf=[[Paragraph(safe(desc),styles['TP_Small']),Paragraph(curr(value),styles['TP_Small'])] for desc,value in items]
                 rows_pdf.append([Paragraph('<b>Subtotal del día</b>',styles['TP_Small']),Paragraph(f'<b>{curr(day["subtotal"])}</b>',styles['TP_Small'])])
@@ -271,8 +467,15 @@ def register_planner(app,connect,trip,rows,UserError):
         table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('ROWBACKGROUNDS',(0,0),(-1,-1),[colors.white,colors.HexColor('#F2F7F7')]),
                                    ('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
         story.append(KeepTogether([Paragraph('Resumen económico',styles['TP_H2']),table,Spacer(1,12),
+                      Paragraph(f'Escenarios orientativos: mínimo {curr(data["escenarios"]["minimo"])} · estimado {curr(data["subtotal"])} · máximo {curr(data["escenarios"]["maximo"])}.',styles['TP_Small']),
+                      Paragraph(safe(data['escenarios']['metodo']),styles['TP_Small']),
+                      Paragraph('Aportantes identificados: '+safe(', '.join(x['nombre'] for x in data['aportantes']) or 'Se definió solo la cantidad de aportantes.'),styles['TP_Small']),
                       Paragraph(f"Gastos realmente registrados: {curr(data['gastado_real'])}. No se suman nuevamente al presupuesto previsto.",styles['TP_Small']),
                       Paragraph('Los importes son estimaciones editables, no cotizaciones ni tarifas confirmadas. Comprueba precios, disponibilidad y traslados.',styles['TP_Small'])]))
+        if data['alertas_plan']:
+            story.append(Paragraph('Revisiones pendientes',styles['TP_H2']))
+            for alert in data['alertas_plan'][:15]:
+                story.append(Paragraph('• '+safe(alert['texto']),styles['TP_Small']))
         pdf.build(story)
         out.seek(0)
         filename='travelplanner-itinerario-'+str(tid)+'.pdf'
